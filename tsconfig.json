@@ -1,0 +1,3 @@
+{
+  "extends": "@agent-container/config/tsconfig.base.json"
+}

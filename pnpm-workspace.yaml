@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+catalog:
+  zod: ^4.1.13
+  typescript: ^6
+  "@types/node": ^22.13.14
+  "@cloudflare/workers-types": ^4.20251213.0
+  wrangler: ^4.77.0
+  "@types/react-dom": ^19.2.3
