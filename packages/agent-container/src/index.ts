@@ -10,6 +10,8 @@ import type {
   WorkspaceController,
 } from "@agent-container/types";
 
+export { LocalWorkspaceController } from "./workspace.js";
+
 export type {
   AgentContainer,
   AgentContainerDescription,
@@ -47,56 +49,48 @@ const notImplemented = (name: string): Error => {
   return new Error(`${name} is not implemented yet in this incremental branch.`);
 };
 
-export class LocalWorkspaceController implements WorkspaceController {
-  public readonly root = "";
-  public readonly mode = "shadow";
-
-  public async read(_path: string): Promise<Uint8Array> {
-    throw notImplemented("LocalWorkspaceController.read");
-  }
-
-  public async readText(_path: string): Promise<string> {
-    throw notImplemented("LocalWorkspaceController.readText");
-  }
-
-  public async write(_path: string, _content: string | Uint8Array): Promise<void> {
-    throw notImplemented("LocalWorkspaceController.write");
-  }
-
-  public async list(_path?: string): Promise<readonly []> {
-    throw notImplemented("LocalWorkspaceController.list");
-  }
-
-  public async stat(_path: string): Promise<never> {
-    throw notImplemented("LocalWorkspaceController.stat");
-  }
-
-  public async glob(_pattern: string | readonly string[]): Promise<readonly string[]> {
-    throw notImplemented("LocalWorkspaceController.glob");
-  }
-
-  public async grep(
-    _query: string,
-    _options?: {
-      include?: string | readonly string[];
-      caseSensitive?: boolean;
-      maxResults?: number;
+function createWorkspaceStub(): WorkspaceController {
+  return {
+    root: "",
+    mode: "shadow",
+    async read(_path: string): Promise<Uint8Array> {
+      throw notImplemented("LocalWorkspaceController.read");
     },
-  ): Promise<readonly []> {
-    throw notImplemented("LocalWorkspaceController.grep");
-  }
-
-  public async remove(_path: string): Promise<void> {
-    throw notImplemented("LocalWorkspaceController.remove");
-  }
-
-  public async resolvePath(_path: string): Promise<string> {
-    throw notImplemented("LocalWorkspaceController.resolvePath");
-  }
-
-  public async dispose(): Promise<void> {
-    throw notImplemented("LocalWorkspaceController.dispose");
-  }
+    async readText(_path: string): Promise<string> {
+      throw notImplemented("LocalWorkspaceController.readText");
+    },
+    async write(_path: string, _content: string | Uint8Array): Promise<void> {
+      throw notImplemented("LocalWorkspaceController.write");
+    },
+    async list(_path?: string): Promise<readonly []> {
+      throw notImplemented("LocalWorkspaceController.list");
+    },
+    async stat(_path: string): Promise<never> {
+      throw notImplemented("LocalWorkspaceController.stat");
+    },
+    async glob(_pattern: string | readonly string[]): Promise<readonly string[]> {
+      throw notImplemented("LocalWorkspaceController.glob");
+    },
+    async grep(
+      _query: string,
+      _options?: {
+        include?: string | readonly string[];
+        caseSensitive?: boolean;
+        maxResults?: number;
+      },
+    ): Promise<readonly []> {
+      throw notImplemented("LocalWorkspaceController.grep");
+    },
+    async remove(_path: string): Promise<void> {
+      throw notImplemented("LocalWorkspaceController.remove");
+    },
+    async resolvePath(_path: string): Promise<string> {
+      throw notImplemented("LocalWorkspaceController.resolvePath");
+    },
+    async dispose(): Promise<void> {
+      throw notImplemented("LocalWorkspaceController.dispose");
+    },
+  };
 }
 
 export class LocalExecController implements ExecController {
@@ -133,7 +127,7 @@ export class LocalAgentContainer implements AgentContainer {
   public readonly exec: ExecController;
 
   public constructor(public readonly options: AgentContainerOptions) {
-    this.workspace = new LocalWorkspaceController();
+    this.workspace = createWorkspaceStub();
     this.env = {
       snapshot() {
         throw notImplemented("ResolvedEnv.snapshot");
