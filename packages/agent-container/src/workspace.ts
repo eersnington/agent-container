@@ -35,6 +35,12 @@ interface ResolvedTarget {
   physicalPath: string;
 }
 
+class WorkspaceWriteDeniedError extends Error {}
+
+function isWorkspaceWriteDeniedError(error: unknown): error is WorkspaceWriteDeniedError {
+  return error instanceof Error && error.name === "WorkspaceWriteDeniedError";
+}
+
 type EmitEvent = (event: Omit<ObservabilityEvent, "timestamp">) => Promise<void>;
 
 function normalizeMountPath(value: string): string {
@@ -81,6 +87,20 @@ async function canonicalizeExistingPath(path: string): Promise<string> {
     return await realpath(path);
   } catch {
     return path;
+  }
+}
+
+async function canonicalizeForContainment(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    const parentPath = dirname(path);
+    if (parentPath === path) {
+      return path;
+    }
+
+    const canonicalParent = await canonicalizeForContainment(parentPath);
+    return join(canonicalParent, basename(path));
   }
 }
 
@@ -189,16 +209,21 @@ export class LocalWorkspaceController implements WorkspaceController {
   }
 
   public async read(path: string): Promise<Uint8Array> {
-    const target = await this.#resolveTarget(path);
-    const content = await readFile(target.physicalPath);
-    await this.#emitEvent({
-      scope: "workspace",
-      action: "read",
-      outcome: "success",
-      target: target.logicalPath,
-      detail: `${content.byteLength} bytes`,
-    });
-    return content;
+    try {
+      const target = await this.#resolveTarget(path);
+      const content = await readFile(target.physicalPath);
+      await this.#emitEvent({
+        scope: "workspace",
+        action: "read",
+        outcome: "success",
+        target: target.logicalPath,
+        detail: `${content.byteLength} bytes`,
+      });
+      return content;
+    } catch (error) {
+      await this.#emitFailure("read", path, error);
+      throw error;
+    }
   }
 
   public async readText(path: string): Promise<string> {
@@ -207,85 +232,109 @@ export class LocalWorkspaceController implements WorkspaceController {
   }
 
   public async write(path: string, content: string | Uint8Array): Promise<void> {
-    const target = await this.#resolveTarget(path, { requireWritable: true });
-    await mkdir(dirname(target.physicalPath), { recursive: true });
-    await writeFile(target.physicalPath, content);
-    await this.#emitEvent({
-      scope: "workspace",
-      action: "write",
-      outcome: "success",
-      target: target.logicalPath,
-    });
+    try {
+      const target = await this.#resolveTarget(path, { requireWritable: true });
+      await mkdir(dirname(target.physicalPath), { recursive: true });
+      await writeFile(target.physicalPath, content);
+      await this.#emitEvent({
+        scope: "workspace",
+        action: "write",
+        outcome: "success",
+        target: target.logicalPath,
+      });
+    } catch (error) {
+      if (!isWorkspaceWriteDeniedError(error)) {
+        await this.#emitFailure("write", path, error);
+      }
+      throw error;
+    }
   }
 
   public async list(path: string = "."): Promise<readonly WorkspaceEntry[]> {
-    const target = await this.#resolveTarget(path);
-    const entries = await readdir(target.physicalPath, { withFileTypes: true });
-    const result: WorkspaceEntry[] = [];
+    try {
+      const target = await this.#resolveTarget(path);
+      const entries = await readdir(target.physicalPath, { withFileTypes: true });
+      const result: WorkspaceEntry[] = [];
 
-    for (const entry of entries) {
-      const childPhysicalPath = resolve(target.physicalPath, entry.name);
-      const childStat = await lstat(childPhysicalPath);
-      const childLogicalPath =
-        target.logicalPath === "."
-          ? entry.name
-          : `${target.logicalPath.replace(/\/$/u, "")}/${entry.name}`;
-      result.push(toWorkspaceEntry(entryKindFromDirent(entry), childStat.size, childLogicalPath));
+      for (const entry of entries) {
+        const childPhysicalPath = resolve(target.physicalPath, entry.name);
+        const childStat = await lstat(childPhysicalPath);
+        const childLogicalPath =
+          target.logicalPath === "."
+            ? entry.name
+            : `${target.logicalPath.replace(/\/$/u, "")}/${entry.name}`;
+        result.push(
+          toWorkspaceEntry(entryKindFromDirent(entry), childStat.size, childLogicalPath),
+        );
+      }
+
+      await this.#emitEvent({
+        scope: "workspace",
+        action: "list",
+        outcome: "success",
+        target: target.logicalPath,
+        detail: `${result.length} entries`,
+      });
+
+      return result;
+    } catch (error) {
+      await this.#emitFailure("list", path, error);
+      throw error;
     }
-
-    await this.#emitEvent({
-      scope: "workspace",
-      action: "list",
-      outcome: "success",
-      target: target.logicalPath,
-      detail: `${result.length} entries`,
-    });
-
-    return result;
   }
 
   public async stat(path: string): Promise<WorkspaceEntry> {
-    const target = await this.#resolveTarget(path);
-    const entryStat = await lstat(target.physicalPath);
-    const entry = toWorkspaceEntry(
-      entryKindFromStat(
-        entryStat.isFile(),
-        entryStat.isDirectory(),
-        entryStat.isSymbolicLink(),
-      ),
-      entryStat.size,
-      target.logicalPath,
-    );
-    await this.#emitEvent({
-      scope: "workspace",
-      action: "stat",
-      outcome: "success",
-      target: target.logicalPath,
-    });
-    return entry;
+    try {
+      const target = await this.#resolveTarget(path);
+      const entryStat = await lstat(target.physicalPath);
+      const entry = toWorkspaceEntry(
+        entryKindFromStat(
+          entryStat.isFile(),
+          entryStat.isDirectory(),
+          entryStat.isSymbolicLink(),
+        ),
+        entryStat.size,
+        target.logicalPath,
+      );
+      await this.#emitEvent({
+        scope: "workspace",
+        action: "stat",
+        outcome: "success",
+        target: target.logicalPath,
+      });
+      return entry;
+    } catch (error) {
+      await this.#emitFailure("stat", path, error);
+      throw error;
+    }
   }
 
   public async glob(pattern: string | readonly string[]): Promise<readonly string[]> {
-    const patterns = Array.isArray(pattern) ? pattern : [pattern];
-    const matches = new Set<string>();
+    try {
+      const patterns = Array.isArray(pattern) ? pattern : [pattern];
+      const matches = new Set<string>();
 
-    for (const mount of this.#mounts) {
-      for await (const entry of glob(patterns, { cwd: mount.sourcePath })) {
-        const normalizedEntry = entry.replace(/\\/gu, "/");
-        const logicalPath =
-          mount.mountPath === "/" ? normalizedEntry : `${mount.mountPath}/${normalizedEntry}`;
-        matches.add(logicalPath === "" ? "." : logicalPath);
+      for (const mount of this.#mounts) {
+        for await (const entry of glob(patterns, { cwd: mount.sourcePath })) {
+          const normalizedEntry = entry.replace(/\\/gu, "/");
+          const logicalPath =
+            mount.mountPath === "/" ? normalizedEntry : `${mount.mountPath}/${normalizedEntry}`;
+          matches.add(logicalPath === "" ? "." : logicalPath);
+        }
       }
-    }
 
-    const sortedMatches = [...matches].sort();
-    await this.#emitEvent({
-      scope: "workspace",
-      action: "glob",
-      outcome: "success",
-      detail: `${sortedMatches.length} matches`,
-    });
-    return sortedMatches;
+      const sortedMatches = [...matches].sort();
+      await this.#emitEvent({
+        scope: "workspace",
+        action: "glob",
+        outcome: "success",
+        detail: `${sortedMatches.length} matches`,
+      });
+      return sortedMatches;
+    } catch (error) {
+      await this.#emitFailure("glob", undefined, error);
+      throw error;
+    }
   }
 
   public async grep(
@@ -296,71 +345,88 @@ export class LocalWorkspaceController implements WorkspaceController {
       maxResults?: number;
     },
   ): Promise<readonly WorkspaceSearchResult[]> {
-    const include = options?.include ?? "**/*";
-    const paths = await this.glob(include);
-    const matches: WorkspaceSearchResult[] = [];
-    const caseSensitive = options?.caseSensitive ?? true;
-    const maxResults = options?.maxResults ?? Number.POSITIVE_INFINITY;
-    const normalizedQuery = caseSensitive ? query : query.toLowerCase();
+    try {
+      const include = options?.include ?? "**/*";
+      const paths = await this.glob(include);
+      const matches: WorkspaceSearchResult[] = [];
+      const caseSensitive = options?.caseSensitive ?? true;
+      const maxResults = options?.maxResults ?? Number.POSITIVE_INFINITY;
+      const normalizedQuery = caseSensitive ? query : query.toLowerCase();
 
-    for (const path of paths) {
-      const entry = await this.stat(path);
-      if (entry.kind !== "file") {
-        continue;
-      }
-
-      const content = await this.readText(path);
-      const lines = content.split(/\r?\n/u);
-      for (const [index, line] of lines.entries()) {
-        const haystack = caseSensitive ? line : line.toLowerCase();
-        const column = haystack.indexOf(normalizedQuery);
-        if (column === -1) {
+      for (const path of paths) {
+        const entry = await this.stat(path);
+        if (entry.kind !== "file") {
           continue;
         }
 
-        matches.push({
-          path,
-          line: index + 1,
-          column: column + 1,
-          content: line,
-        });
+        const content = await this.readText(path);
+        const lines = content.split(/\r?\n/u);
+        for (const [index, line] of lines.entries()) {
+          const haystack = caseSensitive ? line : line.toLowerCase();
+          const column = haystack.indexOf(normalizedQuery);
+          if (column === -1) {
+            continue;
+          }
 
-        if (matches.length >= maxResults) {
-          await this.#emitEvent({
-            scope: "workspace",
-            action: "grep",
-            outcome: "success",
-            detail: `${matches.length} matches`,
+          matches.push({
+            path,
+            line: index + 1,
+            column: column + 1,
+            content: line,
           });
-          return matches;
+
+          if (matches.length >= maxResults) {
+            await this.#emitEvent({
+              scope: "workspace",
+              action: "grep",
+              outcome: "success",
+              detail: `${matches.length} matches`,
+            });
+            return matches;
+          }
         }
       }
+
+      await this.#emitEvent({
+        scope: "workspace",
+        action: "grep",
+        outcome: "success",
+        detail: `${matches.length} matches`,
+      });
+
+      return matches;
+    } catch (error) {
+      await this.#emitFailure("grep", undefined, error);
+      throw error;
     }
-
-    await this.#emitEvent({
-      scope: "workspace",
-      action: "grep",
-      outcome: "success",
-      detail: `${matches.length} matches`,
-    });
-
-    return matches;
   }
 
   public async remove(path: string): Promise<void> {
-    const target = await this.#resolveTarget(path, { requireWritable: true });
-    await rm(target.physicalPath, { recursive: true, force: true });
-    await this.#emitEvent({
-      scope: "workspace",
-      action: "remove",
-      outcome: "success",
-      target: target.logicalPath,
-    });
+    try {
+      const target = await this.#resolveTarget(path, { requireWritable: true });
+      await rm(target.physicalPath, { recursive: true, force: true });
+      await this.#emitEvent({
+        scope: "workspace",
+        action: "remove",
+        outcome: "success",
+        target: target.logicalPath,
+      });
+    } catch (error) {
+      if (!isWorkspaceWriteDeniedError(error)) {
+        await this.#emitFailure("remove", path, error);
+      }
+      throw error;
+    }
   }
 
   public async resolvePath(path: string): Promise<string> {
-    const target = await this.#resolveTarget(path);
-    return target.physicalPath;
+    try {
+      const target = await this.#resolveTarget(path);
+      return target.physicalPath;
+    } catch (error) {
+      await this.#emitFailure("resolve-path", path, error);
+      throw error;
+    }
   }
 
   public async dispose(): Promise<void> {
@@ -398,7 +464,7 @@ export class LocalWorkspaceController implements WorkspaceController {
         outcome: "denied",
         target: logicalPath,
       });
-      throw new Error(`Path is not writable: ${path}`);
+      throw new WorkspaceWriteDeniedError(`Path is not writable: ${path}`);
     }
 
     const relativeLogicalPath =
@@ -407,7 +473,7 @@ export class LocalWorkspaceController implements WorkspaceController {
         : stripLeadingSlash(normalizedForMatch.slice(mount.mountPath.length));
     const unresolvedPhysicalPath = resolve(mount.sourcePath, relativeLogicalPath);
     const canonicalRoot = await canonicalizeExistingPath(mount.sourcePath);
-    const canonicalTarget = await canonicalizeExistingPath(unresolvedPhysicalPath);
+    const canonicalTarget = await canonicalizeForContainment(unresolvedPhysicalPath);
     if (!isWithinRoot(canonicalTarget, canonicalRoot)) {
       throw new Error(`Path escapes workspace root: ${path}`);
     }
@@ -424,5 +490,20 @@ export class LocalWorkspaceController implements WorkspaceController {
     }
 
     await this.#emit(event);
+  }
+
+  async #emitFailure(action: string, target: string | undefined, error: unknown): Promise<void> {
+    if (this.#emit === undefined) {
+      return;
+    }
+
+    const detail = error instanceof Error ? error.message : String(error);
+    await this.#emit({
+      scope: "workspace",
+      action,
+      outcome: "error",
+      target,
+      detail,
+    });
   }
 }
