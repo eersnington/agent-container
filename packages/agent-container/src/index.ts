@@ -1,0 +1,196 @@
+import type {
+  AgentContainer,
+  AgentContainerOptions,
+  AgentContainerPluginDefinition,
+  AgentContainerPluginOptions,
+  ExecController,
+  ResolvedEnv,
+  WorkerdSession,
+  WorkerdSessionOptions,
+  WorkspaceController,
+} from "@agent-container/types";
+
+export type {
+  AgentContainer,
+  AgentContainerDescription,
+  AgentContainerOptions,
+  AgentContainerPluginDefinition,
+  AgentContainerPluginOptions,
+  ContainerStatus,
+  EnvPolicy,
+  ExecController,
+  ExecPolicy,
+  ExecRunOptions,
+  ExecRunResult,
+  ExecShellOptions,
+  HarnessToolBindingMap,
+  NetworkPolicy,
+  ObservabilityEvent,
+  ObservabilitySink,
+  ResolvedEnv,
+  ResolvedEnvEntry,
+  ResolvedEnvSnapshot,
+  WorkerdRunOptions,
+  WorkerdRunResult,
+  WorkerdSession,
+  WorkerdSessionOptions,
+  WorkspaceController,
+  WorkspaceEntry,
+  WorkspaceEntryKind,
+  WorkspaceMode,
+  WorkspaceMount,
+  WorkspaceSearchResult,
+  WorkspaceOptions,
+} from "@agent-container/types";
+
+const notImplemented = (name: string): Error => {
+  return new Error(`${name} is not implemented yet in this incremental branch.`);
+};
+
+export class LocalWorkspaceController implements WorkspaceController {
+  public readonly root = "";
+  public readonly mode = "shadow";
+
+  public async read(_path: string): Promise<Uint8Array> {
+    throw notImplemented("LocalWorkspaceController.read");
+  }
+
+  public async readText(_path: string): Promise<string> {
+    throw notImplemented("LocalWorkspaceController.readText");
+  }
+
+  public async write(_path: string, _content: string | Uint8Array): Promise<void> {
+    throw notImplemented("LocalWorkspaceController.write");
+  }
+
+  public async list(_path?: string): Promise<readonly []> {
+    throw notImplemented("LocalWorkspaceController.list");
+  }
+
+  public async stat(_path: string): Promise<never> {
+    throw notImplemented("LocalWorkspaceController.stat");
+  }
+
+  public async glob(_pattern: string | readonly string[]): Promise<readonly string[]> {
+    throw notImplemented("LocalWorkspaceController.glob");
+  }
+
+  public async grep(
+    _query: string,
+    _options?: {
+      include?: string | readonly string[];
+      caseSensitive?: boolean;
+      maxResults?: number;
+    },
+  ): Promise<readonly []> {
+    throw notImplemented("LocalWorkspaceController.grep");
+  }
+
+  public async remove(_path: string): Promise<void> {
+    throw notImplemented("LocalWorkspaceController.remove");
+  }
+
+  public async resolvePath(_path: string): Promise<string> {
+    throw notImplemented("LocalWorkspaceController.resolvePath");
+  }
+
+  public async dispose(): Promise<void> {
+    throw notImplemented("LocalWorkspaceController.dispose");
+  }
+}
+
+export class LocalExecController implements ExecController {
+  public async run(): Promise<never> {
+    throw notImplemented("LocalExecController.run");
+  }
+
+  public async shell(): Promise<never> {
+    throw notImplemented("LocalExecController.shell");
+  }
+}
+
+export class LocalWorkerdSession implements WorkerdSession {
+  public readonly port = 0;
+  public readonly status = "created" as const;
+
+  public async start(): Promise<void> {
+    throw notImplemented("LocalWorkerdSession.start");
+  }
+
+  public async run(): Promise<never> {
+    throw notImplemented("LocalWorkerdSession.run");
+  }
+
+  public async stop(): Promise<void> {
+    throw notImplemented("LocalWorkerdSession.stop");
+  }
+}
+
+export class LocalAgentContainer implements AgentContainer {
+  public readonly status = "created" as const;
+  public readonly workspace: WorkspaceController;
+  public readonly env: ResolvedEnv;
+  public readonly exec: ExecController;
+
+  public constructor(public readonly options: AgentContainerOptions) {
+    this.workspace = new LocalWorkspaceController();
+    this.env = {
+      snapshot() {
+        throw notImplemented("ResolvedEnv.snapshot");
+      },
+      get() {
+        throw notImplemented("ResolvedEnv.get");
+      },
+      getClassification() {
+        throw notImplemented("ResolvedEnv.getClassification");
+      },
+      toObject() {
+        throw notImplemented("ResolvedEnv.toObject");
+      },
+    };
+    this.exec = new LocalExecController();
+  }
+
+  public async start(): Promise<void> {
+    throw notImplemented("LocalAgentContainer.start");
+  }
+
+  public async stop(): Promise<void> {
+    throw notImplemented("LocalAgentContainer.stop");
+  }
+
+  public describe(): never {
+    throw notImplemented("LocalAgentContainer.describe");
+  }
+
+  public async createWorkerdSession(_options?: WorkerdSessionOptions): Promise<WorkerdSession> {
+    throw notImplemented("LocalAgentContainer.createWorkerdSession");
+  }
+}
+
+export async function createAgentContainer(
+  options: AgentContainerOptions,
+): Promise<AgentContainer> {
+  return new LocalAgentContainer(options);
+}
+
+export function defineAgentContainerPlugin(
+  options: AgentContainerPluginOptions,
+): AgentContainerPluginDefinition {
+  return {
+    name: options.name,
+    container: options.container,
+    capabilities: [],
+    tools: options.tools ?? {},
+  };
+}
+
+export async function createWorkerdSession(
+  _options?: WorkerdSessionOptions,
+): Promise<WorkerdSession> {
+  throw notImplemented("createWorkerdSession");
+}
+
+export function resolveEnv(): never {
+  throw notImplemented("resolveEnv");
+}
