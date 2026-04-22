@@ -5,7 +5,17 @@
     "moduleResolution": "NodeNext",
     "target": "ES2023",
     "lib": ["ES2023", "DOM"],
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "agent-container": ["../../packages/agent-container/src/index.ts"],
+      "@agent-container/test-utils": ["../../packages/test-utils/src/index.ts"],
+      "@agent-container/types": ["../../packages/types/src/index.ts"]
+    }
   },
-  "include": ["vitest.config.ts", "tests/**/*.ts"]
+  "include": ["vitest.config.ts", "tests/**/*.ts"],
+  "references": [
+    { "path": "../../packages/types" },
+    { "path": "../../packages/test-utils" },
+    { "path": "../../packages/agent-container" }
+  ]
 }
