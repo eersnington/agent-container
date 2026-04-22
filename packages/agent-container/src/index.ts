@@ -10,6 +10,7 @@ import type {
   WorkspaceController,
 } from "@agent-container/types";
 
+export { LocalExecController } from "./exec.js";
 export { LocalWorkspaceController } from "./workspace.js";
 
 export type {
@@ -93,14 +94,15 @@ function createWorkspaceStub(): WorkspaceController {
   };
 }
 
-export class LocalExecController implements ExecController {
-  public async run(): Promise<never> {
-    throw notImplemented("LocalExecController.run");
-  }
-
-  public async shell(): Promise<never> {
-    throw notImplemented("LocalExecController.shell");
-  }
+function createExecStub(): ExecController {
+  return {
+    async run(): Promise<never> {
+      throw notImplemented("LocalExecController.run");
+    },
+    async shell(): Promise<never> {
+      throw notImplemented("LocalExecController.shell");
+    },
+  };
 }
 
 export class LocalWorkerdSession implements WorkerdSession {
@@ -142,7 +144,7 @@ export class LocalAgentContainer implements AgentContainer {
         throw notImplemented("ResolvedEnv.toObject");
       },
     };
-    this.exec = new LocalExecController();
+    this.exec = createExecStub();
   }
 
   public async start(): Promise<void> {
