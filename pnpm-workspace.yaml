@@ -6,5 +6,10 @@ catalog:
   typescript: ^6
   "@types/node": ^22.13.14
   "@cloudflare/workers-types": ^4.20251213.0
+  oxfmt: ^0.26.0
+  oxlint: ^1.41.0
+  tsx: ^4.21.0
+  vitest: ^4.1.5
+  workerd: ^1.20260422.1
   wrangler: ^4.77.0
   "@types/react-dom": ^19.2.3
