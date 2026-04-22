@@ -10,6 +10,7 @@ import type {
   WorkspaceController,
 } from "@agent-container/types";
 
+export { LocalCapabilityBridgeServer } from "./bridge.js";
 export { LocalExecController } from "./exec.js";
 export { LocalWorkspaceController } from "./workspace.js";
 
