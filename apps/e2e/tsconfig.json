@@ -1,0 +1,11 @@
+{
+  "extends": "@agent-container/config/tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"]
+  },
+  "include": ["vitest.config.ts", "tests/**/*.ts"]
+}
