@@ -9,6 +9,10 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
+    "test": "turbo test",
+    "clean": "turbo clean",
+    "typecheck": "turbo typecheck",
+    "test:e2e": "pnpm --dir apps/e2e test",
     "check": "oxlint && oxfmt --write"
   },
   "dependencies": {
@@ -18,9 +22,9 @@
     "@agent-container/config": "workspace:*",
     "@cloudflare/workers-types": "catalog:",
     "@types/node": "catalog:",
-    "oxfmt": "^0.26.0",
-    "oxlint": "^1.41.0",
-    "turbo": "^2.8.12",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "turbo": "^2.9.6",
     "typescript": "catalog:"
   },
   "packageManager": "pnpm@10.33.0"

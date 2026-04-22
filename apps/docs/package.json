@@ -8,6 +8,7 @@
     "build": "vite build",
     "start": "vite preview",
     "preview": "vite preview",
+    "typecheck": "fumadocs-mdx && tsc --noEmit",
     "types:check": "fumadocs-mdx && tsc --noEmit",
     "postinstall": "fumadocs-mdx"
   },

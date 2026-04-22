@@ -7,11 +7,22 @@
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
       "outputs": ["dist/**", ".vercel/output/**"]
     },
+    "test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "outputs": []
+    },
     "lint": {
       "dependsOn": ["^lint"]
     },
+    "typecheck": {
+      "dependsOn": ["^typecheck"]
+    },
     "check-types": {
       "dependsOn": ["^check-types"]
+    },
+    "clean": {
+      "dependsOn": ["^clean"]
     },
     "dev": {
       "cache": false,
