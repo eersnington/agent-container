@@ -12,6 +12,7 @@ import type {
 
 export { LocalCapabilityBridgeServer } from "./bridge.js";
 export { LocalExecController } from "./exec.js";
+export { createWorkerdSession, LocalWorkerdSession } from "./workerd/index.js";
 export { LocalWorkspaceController } from "./workspace.js";
 
 export type {
@@ -106,23 +107,6 @@ function createExecStub(): ExecController {
   };
 }
 
-export class LocalWorkerdSession implements WorkerdSession {
-  public readonly port = 0;
-  public readonly status = "created" as const;
-
-  public async start(): Promise<void> {
-    throw notImplemented("LocalWorkerdSession.start");
-  }
-
-  public async run(): Promise<never> {
-    throw notImplemented("LocalWorkerdSession.run");
-  }
-
-  public async stop(): Promise<void> {
-    throw notImplemented("LocalWorkerdSession.stop");
-  }
-}
-
 export class LocalAgentContainer implements AgentContainer {
   public readonly status = "created" as const;
   public readonly workspace: WorkspaceController;
@@ -180,12 +164,6 @@ export function defineAgentContainerPlugin(
     capabilities: [],
     tools: options.tools ?? {},
   };
-}
-
-export async function createWorkerdSession(
-  _options?: WorkerdSessionOptions,
-): Promise<WorkerdSession> {
-  throw notImplemented("createWorkerdSession");
 }
 
 export function resolveEnv(): never {
