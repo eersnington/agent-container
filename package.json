@@ -1,5 +1,5 @@
 {
-  "name": "agent-container",
+  "name": "@agent-container/workspace",
   "private": true,
   "workspaces": [
     "apps/*",
