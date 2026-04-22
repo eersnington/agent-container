@@ -3,7 +3,10 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import mdx from "fumadocs-mdx/vite";
 import { nitro } from "nitro/vite";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+
+const tslibPath = fileURLToPath(new URL("./node_modules/tslib/tslib.es6.js", import.meta.url));
 
 export default defineConfig({
   server: {
@@ -25,8 +28,6 @@ export default defineConfig({
   ],
   resolve: {
     tsconfigPaths: true,
-    alias: {
-      tslib: "tslib/tslib.es6.js",
-    },
+    alias: [{ find: /^tslib$/, replacement: tslibPath }],
   },
 });
