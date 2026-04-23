@@ -1,18 +1,37 @@
-# Agent Container 
+# Agent Container
 
 ### Give your agents tiny boxes, powered by [workerd](https://github.com/cloudflare/workerd)
 
 > ⚠️ This project is under active development. APIs may change.
 
-Agent Container is a workerd-based sandbox for running untrusted code from AI agents. It exposes structured capability bindings (filesystem, exec, env) scoped to a single repository, rather than giving agents raw access to the host system.
+Agent Container is a small runtime layer for running agent-generated code against a repository through capability bindings.
 
-It's useful for coding assistants, autonomous agents, and any platform that needs to run agent-generated code with fine-grained control over what that code can access.
+The core idea is that a repository should not have to be the process working directory, the filesystem authority boundary, the command execution boundary, and the environment boundary all at once. Instead, the host owns the real authority and projects only the intended pieces into `workerd` as live bindings:
 
---- 
+```ts
+const pkg = await WORKSPACE.readText("package.json");
+const { stdout } = await EXEC.run({ command: "node", args: ["--version"] });
+const apiUrl = await ENV.get("API_URL");
+```
+
+rather than handing agent code raw host APIs:
+
+```ts
+const pkg = await fs.readFile("/Users/me/project/package.json", "utf8");
+const { stdout } = await execFile("node", ["--version"]);
+const apiUrl = process.env.API_URL;
+```
+
+That distinction is the point of this project. Agent Container gives coding agent harnesses a capability-bound execution model: guest code runs in `workerd`, while the Node.js host brokers filesystem access, subprocess execution, environment values, network policy, and observability through explicit bindings.
+
+---
+
 <p align="center">
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#why">Why</a> &middot;
-  <a href="#architecture">Architecture</a> &middot;
+  <a href="#threat-model"</a> &middot;
+  <a href="#how-it-works">How It Works</a> &middot;
+  <a href="#bindings">Bindings</a> &middot;
   <a href="#api">API</a> &middot;
   <a href="#development">Development</a>
 </p>
@@ -27,13 +46,16 @@ import { createAgentContainer } from "agent-container";
 const container = await createAgentContainer({
   workspace: {
     root: process.cwd(),
-    mode: "shadow", // disposable copy of your repo
+    mode: "shadow", // run against a disposable copy of the repo
   },
   env: {
     include: ["PUBLIC_*", "APP_*"],
   },
   exec: {
     allowedCommands: ["node", "git"],
+  },
+  network: {
+    allowFetch: false,
   },
 });
 
@@ -57,152 +79,236 @@ await session.stop();
 await container.stop();
 ```
 
-The code inside `workerd` cannot access `fs`, `process`, or `child_process` directly. It operates through explicit capability bindings that the host controls.
-
+Code inside the `workerd` session does not get Node's `fs`, `process`, or `child_process` APIs. It gets the bindings the host chooses to expose.
 
 ## Why
 
-Coding agents need to work inside real projects: reading files, writing code, running scripts, using environment variables. But giving an agent unrestricted access to your machine is dangerous, and dropping it into a fake environment breaks too many real-world workflows.
+Most coding agent harnesses gets tools like read, write, edit, grep, bash, and git. Those tools often run on the host system with the project directory acting as a soft boundary. That works, but it makes the working directory do too many jobs:
 
-**agent-container** solves this by running agent code inside workerd while keeping all real authority in a Node.js host process. The agent gets a natural development experience. You keep control.
+- repo root
+- execution boundary
+- filesystem authority boundary
+- environment boundary
+- audit boundary
 
-| Problem | Solution |
-|---------|----------|
-| Agent sees `~`, `.ssh`, unrelated directories | Workspace-scoped filesystem with explicit mounts |
-| Agent reads raw `.env` files | Env resolution with secret classification |
-| Agent spawns arbitrary processes | Allowlisted command execution with timeouts |
-| Agent has ambient network access | Controlled fetch with origin restrictions |
-| Hard to audit agent actions | Structured observability events |
+Those are different concerns.
 
+Agent Container separates them. The repository becomes a scoped `WORKSPACE` object. Command execution becomes an `EXEC` binding with allowlists, timeouts, controlled cwd resolution, and logged outcomes. Environment access becomes `ENV` and `SECRETS`, populated only from selected sources. Network access is configured at the `workerd` session level instead of being assumed.
 
-## Architecture
+This follows the Cloudflare Workers resource model, where bindings carry both permission and API as runtime objects. In an agent harness, the same model maps cleanly to the resources an agent needs for coding work.
+
+## Threat Model
+
+Agent Container should not be described as a secure sandbox for fully untrusted code.
+
+It reduces ambient authority by moving access behind bindings, but the host still brokers real filesystem and subprocess operations. `EXEC.run` still starts real host subprocesses. `WORKSPACE` still maps to real files or a copied workspace. The bridge is session-local and token-gated, but it is not a replacement for VM, container, kernel, or production-grade isolation when running adversarial code.
+
+The goal is narrower and more useful for coding agents: do not give generated code broad host authority by default. Give it explicit capabilities that a harness can inspect, constrain, log, and eventually swap for stronger backends.
+
+## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  HOST (Node.js)                                                             │
-│                                                                             │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐              │
-│  │   Workspace     │  │      Env        │  │      Exec       │              │
-│  │   Controller    │  │    Resolver     │  │   Controller    │              │
-│  │                 │  │                 │  │                 │              │
-│  │  • live/shadow  │  │  • .env files   │  │  • allowlist    │              │
-│  │  • mounts       │  │  • process.env  │  │  • timeouts     │              │
-│  │  • read/write   │  │  • secrets      │  │  • shell policy │              │
-│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘              │
-│           │                    │                    │                       │
-│           └────────────────────┼────────────────────┘                       │
-│                                │                                            │
-│                    ┌───────────▼───────────┐                                │
-│                    │   Capability Bridge   │                                │
-│                    │   (localhost HTTP)    │                                │
-│                    └───────────┬───────────┘                                │
-└────────────────────────────────┼────────────────────────────────────────────┘
-                                 │
-┌────────────────────────────────┼────────────────────────────────────────────┐
-│  GUEST (workerd)               │                                            │
-│                                ▼                                            │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                        Capability Bindings                           │   │
-│  │                                                                      │   │
-│  │   WORKSPACE        EXEC           ENV          SECRETS    OBSERVE    │   │
-│  │   read/write       run/shell      get/keys     get/keys   emit       │   │
-│  │   glob/grep        (allowlist)    (public)     (secret)              │   │
-│  │   list/stat                                                          │   │
-│  │                                                                      │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  No direct fs, process, or child_process access                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+HOST (Node.js)
+
+  Workspace Controller       Env Resolver          Exec Controller
+  - live/shadow roots        - .env files          - command allowlist
+  - ro/rw mounts             - inline values       - cwd inside workspace
+  - path containment         - process env policy  - timeouts
+  - list/stat/glob/grep      - secret classes      - structured results
+
+            \                    |                    /
+             \                   |                   /
+              +--------- Capability Bridge ----------+
+                        localhost HTTP + token
+                                 |
+                                 v
+
+GUEST (workerd)
+
+  JavaScript runs with explicit bindings:
+
+  WORKSPACE    EXEC        ENV        SECRETS      OBSERVE
+  read/write   run/shell   get/keys   get/keys     emit
+  list/stat
+  glob/grep
+  remove
 ```
 
-- **Host (Node.js)** owns all real authority: filesystem, environment, subprocesses, network policy, observability
-- **Guest (workerd)** runs agent code with only the capabilities explicitly granted through bindings
+The current `workerd` harness evaluates JavaScript snippets and passes in binding objects. Those binding methods call a session-local bridge. The bridge validates JSON requests, checks the configured policy through the host controllers, performs the operation, and emits observability events when configured.
 
-The capability bridge is a session-local HTTP server that maps guest-side binding calls to host-side controllers. Each request is validated, policy-checked, and logged before execution.
+## Current Surface
 
+Implemented today:
 
-## Capabilities
+- `createAgentContainer(options)` assembles workspace, env, exec, network, and observability policy.
+- `container.createWorkerdSession()` starts a real `workerd` process with a generated config.
+- `WORKSPACE` supports `readText`, `writeText`, `list`, `stat`, `glob`, `grep`, and `remove`.
+- Workspace mode can be `live` or `shadow`; `shadow` copies the repository to a disposable temp directory.
+- Workspace mounts can expose additional paths as read-only or read-write logical mount points.
+- `EXEC.run` starts allowlisted host commands with workspace-scoped cwd resolution, timeout handling, and selected env projection.
+- `EXEC.shell` exists, but only works when `allowShell` is enabled.
+- `ENV` exposes public variables and `SECRETS` exposes secret-classified variables.
+- `OBSERVE.emit` lets guest code add structured events to the host observability sink.
+- `workerd` outbound fetch is disabled by default and can be enabled with optional origin filtering.
+
+Not implemented yet (WIP):
+
+- a first-class `GIT` binding
+- a first-class `NET` binding
+- module loading for arbitrary TypeScript projects inside the guest
+
+## Bindings
 
 ### WORKSPACE
 
-Scoped filesystem access with optional mounts.
+`WORKSPACE` is the repository-shaped view given to agent code.
 
 ```ts
-// Read and write files
 const content = await WORKSPACE.readText("src/index.ts");
-await WORKSPACE.writeText("output/result.json", JSON.stringify(data));
+await WORKSPACE.writeText("notes/result.json", JSON.stringify(data, null, 2));
 
-// Search
-const files = await WORKSPACE.glob("**/*.ts");
-const matches = await WORKSPACE.grep("TODO", { include: "**/*.ts" });
-
-// Inspect
 const entries = await WORKSPACE.list("src");
 const info = await WORKSPACE.stat("package.json");
+
+const files = await WORKSPACE.glob(["src/**/*.ts", "README.md"]);
+const matches = await WORKSPACE.grep("TODO", {
+  include: "**/*.ts",
+  caseSensitive: false,
+  maxResults: 20,
+});
 ```
 
-**Modes:**
-- `live` — operate directly on the repo (default)
-- `shadow` — operate on a disposable copy
+Modes:
 
-**Mounts:** attach additional paths with `ro` or `rw` access.
+- `live` operates on the configured root.
+- `shadow` copies the configured root to a temporary directory and operates there.
+
+Mounts:
+
+```ts
+const container = await createAgentContainer({
+  workspace: {
+    root: process.cwd(),
+    mounts: [
+      { mountPath: "/docs", sourcePath: "/path/to/docs", mode: "ro" },
+      { mountPath: "/scratch", sourcePath: "/path/to/scratch", mode: "rw" },
+    ],
+  },
+});
+```
+
+The workspace controller resolves logical paths against the matching mount and rejects path traversal outside that mount's physical root.
 
 ### EXEC
 
-Controlled subprocess execution.
+`EXEC` is brokered subprocess execution.
 
 ```ts
-const { stdout, exitCode } = await EXEC.run({
+const result = await EXEC.run({
   command: "node",
   args: ["--version"],
-  timeoutMs: 5000,
+  timeoutMs: 5_000,
 });
 
-// Shell execution (requires allowShell: true)
-const result = await EXEC.shell({
-  script: "ls -la | head -5",
-});
+console.log(result.stdout, result.exitCode);
 ```
 
-**Policy options:**
-- `allowedCommands` — whitelist of executables
-- `allowShell` — enable/disable shell scripts
-- `defaultTimeoutMs` — execution timeout
-
-### ENV / SECRETS
-
-Separated environment variable access.
+Policy:
 
 ```ts
-// Public config
-const apiUrl = await ENV.get("API_URL");
-const publicKeys = await ENV.keys();
-
-// Secrets (classified by pattern matching)
-const apiKey = await SECRETS.get("API_KEY");
+const container = await createAgentContainer({
+  workspace: { root: process.cwd() },
+  exec: {
+    allowedCommands: ["node", "git"],
+    allowShell: false,
+    defaultTimeoutMs: 30_000,
+  },
+});
 ```
 
-**Classification:** variables matching patterns like `*_KEY`, `*_TOKEN`, `*_SECRET` are automatically classified as secrets and isolated from `ENV`.
+Environment projection into subprocesses is explicit:
+
+```ts
+await EXEC.run({
+  command: "node",
+  args: ["script.js"],
+  envKeys: ["PUBLIC_MODE"],
+  env: { EXTRA_FLAG: "1" },
+});
+```
+
+Secrets are excluded from subprocess env by default, even when listed in `envKeys`. Use `includeSecrets: true` only when the command genuinely needs them.
+
+### ENV and SECRETS
+
+`ENV` and `SECRETS` expose selected configuration values without giving the guest raw `process.env`.
+
+```ts
+const mode = await ENV.get("PUBLIC_MODE");
+const publicKeys = await ENV.keys();
+
+const token = await SECRETS.get("API_SECRET_TOKEN");
+const secretKeys = await SECRETS.keys();
+```
+
+Env policy can load from `.env`, `.env.local`, inline values, and selected process env values:
+
+```ts
+const container = await createAgentContainer({
+  workspace: { root: process.cwd() },
+  env: {
+    include: ["PUBLIC_*", "API_SECRET_*"],
+    exclude: ["PUBLIC_DEBUG_ONLY"],
+    processEnv: "allow-matching",
+    secretPatterns: ["*_KEY", "*_TOKEN", "*_SECRET", "*_PASSWORD"],
+  },
+});
+```
+
+### Network
+
+There is no first-class `NET` binding yet. Current network policy controls `workerd`'s global outbound fetch behavior:
+
+```ts
+const session = await container.createWorkerdSession({
+  allowFetch: true,
+  allowedFetchOrigins: ["api.example.com"],
+});
+```
+
+By default, outbound fetch is blocked. If `allowedFetchOrigins` is set, the generated `workerd` config routes requests through a filtering worker before public network access.
 
 ### OBSERVE
 
-Structured event emission for audit trails.
+Host-side controllers emit structured events for container lifecycle, workspace operations, env resolution, exec outcomes, and `workerd` runs.
+
+```ts
+const events = [];
+
+const container = await createAgentContainer({
+  workspace: { root: process.cwd() },
+  observability: {
+    emit(event) {
+      events.push(event);
+    },
+  },
+});
+```
+
+Guest code can also emit events:
 
 ```ts
 await OBSERVE.emit({
   scope: "workspace",
-  action: "custom-operation",
+  action: "custom-check",
   outcome: "success",
-  detail: "processed 42 files",
+  detail: "validated generated files",
 });
 ```
-
 
 ## API
 
 ### createAgentContainer(options)
-
-Creates a container with configured policies.
 
 ```ts
 interface AgentContainerOptions {
@@ -239,27 +345,37 @@ interface AgentContainerOptions {
 
 ### container.createWorkerdSession(options?)
 
-Creates a workerd session for running code.
-
 ```ts
 const session = await container.createWorkerdSession({
-  startupTimeoutMs: 30000,
-  compatibilityDate: "2026-01-01",
+  startupTimeoutMs: 30_000,
+  compatibilityDate: "2026-04-20",
+  allowFetch: false,
 });
 
 await session.start();
-const { result, logs, durationMs } = await session.run({ code: "..." });
+
+const { result, logs, durationMs } = await session.run({
+  code: `
+    console.log("inside workerd");
+    return await WORKSPACE.readText("README.md");
+  `,
+  timeoutMs: 5_000,
+});
+
 await session.stop();
 ```
 
 ### defineAgentContainerPlugin(options)
 
-Defines a plugin for integration with agent harnesses.
+Defines a small plugin descriptor that agent harnesses can use to map their tool names to Agent Container bindings.
 
 ```ts
 const plugin = defineAgentContainerPlugin({
   name: "my-agent",
-  container: { workspace: { root: "." } },
+  container: {
+    workspace: { root: "." },
+    exec: { allowedCommands: ["node"] },
+  },
   tools: {
     read: "WORKSPACE.readText",
     bash: "EXEC.run",
@@ -267,22 +383,20 @@ const plugin = defineAgentContainerPlugin({
 });
 ```
 
-
 ## Project Structure
 
 ```
 packages/
-├── agent-container/    # Core runtime
+├── agent-container/    # Core runtime, controllers, bridge, workerd session
 ├── types/              # Shared TypeScript types
 ├── cli/                # CLI tools
 └── test-utils/         # Test helpers
 
 apps/
-├── e2e/                # Integration tests
+├── e2e/                # End-to-end harness tests
 ├── playground/         # Development playground (WIP)
 └── docs/               # Documentation (WIP)
 ```
-
 
 ## Development
 
@@ -297,11 +411,10 @@ pnpm test:e2e
 ### CLI (WIP)
 
 ```sh
-# Print container description for current directory
 agent-container describe
 ```
 
----
+`describe` prints the container description for the current directory.
 
 ## License
 
