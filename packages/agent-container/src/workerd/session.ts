@@ -80,6 +80,7 @@ async function waitForReady(options: {
       }
 
       try {
+        // eslint-disable-next-line no-await-in-loop -- readiness probes must stay serialized so we do not stack overlapping fetches
         const response = await fetch(`http://127.0.0.1:${options.port}/health`);
         if (response.ok) {
           return;
@@ -88,6 +89,7 @@ async function waitForReady(options: {
         // Keep waiting until the server is reachable.
       }
 
+      // eslint-disable-next-line no-await-in-loop -- polling intentionally waits between attempts instead of spawning concurrent timers
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
