@@ -4,9 +4,9 @@
 
 > ⚠️ This project is under active development. APIs may change.
 
-Agent Container is a small runtime layer for running agent-generated code against a repository through capability bindings.
+Agent Container is a small runtime layer for running agent-generated code against a workspace through capability bindings.
 
-The core idea is that a repository should not have to be the process working directory, the filesystem authority boundary, the command execution boundary, and the environment boundary all at once. Instead, the host owns the real authority and projects only the intended pieces into `workerd` as live bindings:
+The core idea is that a workspace should not have to be the process working directory, the filesystem authority boundary, the command execution boundary, and the environment boundary all at once. Instead, the host owns the real authority and projects only the intended pieces into `workerd` as live bindings:
 
 ```ts
 const pkg = await WORKSPACE.readText("package.json");
@@ -46,7 +46,7 @@ import { createAgentContainer } from "agent-container";
 const container = await createAgentContainer({
   workspace: {
     root: process.cwd(),
-    mode: "shadow", // run against a disposable copy of the repo
+    mode: "shadow", // run against a disposable copy of the workspace
   },
   env: {
     include: ["PUBLIC_*", "APP_*"],
@@ -85,7 +85,7 @@ Code inside the `workerd` session does not get Node's `fs`, `process`, or `child
 
 Most coding agent harnesses gets tools like read, write, edit, grep, bash, and git. Those tools often run on the host system with the project directory acting as a soft boundary. That works, but it makes the working directory do too many jobs:
 
-- repo root
+- workspace root
 - execution boundary
 - filesystem authority boundary
 - environment boundary
@@ -93,7 +93,7 @@ Most coding agent harnesses gets tools like read, write, edit, grep, bash, and g
 
 Those are different concerns.
 
-Agent Container separates them. The repository becomes a scoped `WORKSPACE` object. Command execution becomes an `EXEC` binding with allowlists, timeouts, controlled cwd resolution, and logged outcomes. Environment access becomes `ENV` and `SECRETS`, populated only from selected sources. Network access is configured at the `workerd` session level instead of being assumed.
+Agent Container separates them. The workspace root becomes a scoped `WORKSPACE` object. Command execution becomes an `EXEC` binding with allowlists, timeouts, controlled cwd resolution, and logged outcomes. Environment access becomes `ENV` and `SECRETS`, populated only from selected sources. Network access is configured at the `workerd` session level instead of being assumed.
 
 This follows the Cloudflare Workers resource model, where bindings carry both permission and API as runtime objects. In an agent harness, the same model maps cleanly to the resources an agent needs for coding work.
 
@@ -143,7 +143,7 @@ Implemented today:
 - `createAgentContainer(options)` assembles workspace, env, exec, network, and observability policy.
 - `container.createWorkerdSession()` starts a real `workerd` process with a generated config.
 - `WORKSPACE` supports `readText`, `writeText`, `list`, `stat`, `glob`, `grep`, and `remove`.
-- Workspace mode can be `live` or `shadow`; `shadow` copies the repository to a disposable temp directory.
+- Workspace mode can be `live` or `shadow`; `shadow` copies the workspace to a disposable temp directory.
 - Workspace mounts can expose additional paths as read-only or read-write logical mount points.
 - Workspace reads are env-aware: root `.env*` sources are exposed as filtered dotenv views, and env-like files outside configured env sources are denied.
 - `workspace.denyRead` can deny additional non-env paths from `WORKSPACE.readText` and `WORKSPACE.grep`.
@@ -163,7 +163,7 @@ Not implemented yet (WIP):
 
 ### WORKSPACE
 
-`WORKSPACE` is the repository-shaped view given to agent code.
+`WORKSPACE` is the project-shaped view given to agent code.
 
 ```ts
 const content = await WORKSPACE.readText("src/index.ts");
