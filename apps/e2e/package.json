@@ -9,6 +9,9 @@
     "check-types": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@mariozechner/pi-ai": "^0.69.0",
+    "@mariozechner/pi-coding-agent": "^0.69.0",
+    "@sinclair/typebox": "^0.34.49",
     "@agent-container/test-utils": "workspace:*",
     "@agent-container/types": "workspace:*",
     "agent-container": "workspace:*",
