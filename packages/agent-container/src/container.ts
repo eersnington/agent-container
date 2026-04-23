@@ -153,8 +153,10 @@ export class LocalAgentContainer implements AgentContainer {
 export async function createAgentContainer(
   options: AgentContainerOptions,
 ): Promise<AgentContainer> {
-  const workspace = await LocalWorkspaceController.create(options.workspace, (event) =>
-    emitWithSink(options, event),
+  const workspace = await LocalWorkspaceController.create(
+    options.workspace,
+    (event) => emitWithSink(options, event),
+    { env: options.env },
   );
   const env = await resolveEnv(workspace.root, options.env);
   const exec = new LocalExecController({

@@ -156,4 +156,94 @@ describe("workspace integration", () => {
       },
     ]);
   });
+
+  it("returns filtered content for default root env sources", async () => {
+    const workspaceRoot = await createTempWorkspace("agent-container-workspace-env-default-");
+    await writeWorkspaceFiles(workspaceRoot.root, {
+      ".env": "PUBLIC_READ_KEY=hello-world\nPRIVATE_API_KEY=foobarbaz\n",
+      ".env.local": "PUBLIC_LOCAL_MODE=demo\nPRIVATE_LOCAL_TOKEN=hidden\n",
+      "package.json": "{\"name\":\"demo\"}\n",
+      "src/index.ts": "export const value = 1;\n",
+      "src/.env.prod": "PRIVATE_NESTED_TOKEN=hidden\n",
+    });
+
+    const events: ObservabilityEvent[] = [];
+    const workspace = await LocalWorkspaceController.create(
+      {
+        root: workspaceRoot.root,
+        mode: "live",
+      },
+      async (event) => {
+        events.push({ timestamp: new Date().toISOString(), ...event });
+      },
+      {
+        env: {
+          include: ["PUBLIC_*"],
+          processEnv: "none",
+        },
+      },
+    );
+    resources.add({ workspaces: [workspaceRoot], controller: workspace });
+
+    expect(await workspace.readText("package.json")).toBe("{\"name\":\"demo\"}\n");
+    expect(await workspace.readText("src/index.ts")).toBe("export const value = 1;\n");
+    expect(await workspace.readText(".env")).toBe("PUBLIC_READ_KEY=\"hello-world\"");
+    expect(await workspace.readText(".env.local")).toBe("PUBLIC_LOCAL_MODE=\"demo\"");
+    expect(await workspace.grep("PRIVATE_API_KEY", { include: [".env", ".env.local"] })).toEqual([]);
+    await expect(workspace.readText("src/.env.prod")).rejects.toThrow(
+      "Path is not readable: src/.env.prod",
+    );
+    expect(
+      events.some((event) => event.scope === "workspace" && event.action === "read-denied"),
+    ).toBe(true);
+  });
+
+  it("uses explicit env file sources as the only readable env-like files", async () => {
+    const workspaceRoot = await createTempWorkspace("agent-container-workspace-env-explicit-");
+    await writeWorkspaceFiles(workspaceRoot.root, {
+      ".env": "PUBLIC_READ_KEY=hello-world\nPRIVATE_API_KEY=foobarbaz\n",
+      ".env.local": "PUBLIC_LOCAL_MODE=demo\n",
+    });
+
+    const workspace = await LocalWorkspaceController.create(
+      {
+        root: workspaceRoot.root,
+        mode: "live",
+      },
+      undefined,
+      {
+        env: {
+          sources: [{ type: "file", path: ".env" }],
+          include: ["PUBLIC_*"],
+          processEnv: "none",
+        },
+      },
+    );
+    resources.add({ workspaces: [workspaceRoot], controller: workspace });
+
+    expect(await workspace.readText(".env")).toBe("PUBLIC_READ_KEY=\"hello-world\"");
+    await expect(workspace.readText(".env.local")).rejects.toThrow(
+      "Path is not readable: .env.local",
+    );
+  });
+
+  it("applies custom denyRead patterns to non-env files", async () => {
+    const workspaceRoot = await createTempWorkspace("agent-container-workspace-deny-read-");
+    await writeWorkspaceFiles(workspaceRoot.root, {
+      "package.json": "{\"name\":\"demo\"}\n",
+      "config/app.secret": "hidden\n",
+    });
+
+    const workspace = await LocalWorkspaceController.create({
+      root: workspaceRoot.root,
+      mode: "live",
+      denyRead: ["**/*.secret"],
+    });
+    resources.add({ workspaces: [workspaceRoot], controller: workspace });
+
+    expect(await workspace.readText("package.json")).toBe("{\"name\":\"demo\"}\n");
+    await expect(workspace.readText("config/app.secret")).rejects.toThrow(
+      "Path is not readable: config/app.secret",
+    );
+  });
 });
