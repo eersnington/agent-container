@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+const workerdPathFallback = "workerd";
+
 async function exists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -28,22 +30,24 @@ export async function findWorkerdBinary(explicitPath?: string): Promise<string> 
     join(__dirname, "..", "..", "..", "node_modules", "workerd", "bin", "workerd"),
     join(process.cwd(), "node_modules", ".bin", "workerd"),
     join(process.cwd(), "node_modules", "workerd", "bin", "workerd"),
-    "workerd",
   ];
 
-  for (const candidate of candidates) {
-    if (candidate === "workerd") {
-      return candidate;
-    }
+  const resolvedCandidates = await Promise.all(
+    candidates.map(async (candidate) => ({
+      candidate,
+      exists: await exists(candidate),
+    })),
+  );
 
-    if (await exists(candidate)) {
-      return candidate;
+  for (const resolvedCandidate of resolvedCandidates) {
+    if (resolvedCandidate.exists) {
+      return resolvedCandidate.candidate;
     }
   }
 
-  throw new Error(
-    "Could not find a workerd binary. Install workerd in the workspace or pass workerdBinary explicitly.",
-  );
+  // Returning "workerd" here is intentional: `spawn("workerd", ...)` asks the OS
+  // to resolve the executable from PATH when we did not find a workspace-local binary.
+  return workerdPathFallback;
 }
 
 export async function findFreePort(): Promise<number> {
