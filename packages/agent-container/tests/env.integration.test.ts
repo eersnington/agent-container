@@ -96,4 +96,27 @@ describe("env integration", () => {
       }
     }
   });
+
+  it("discovers root env files by default and filters excluded private keys", async () => {
+    const workspace = await createTempWorkspace("agent-container-env-default-sources-");
+    resources.add(workspace);
+    await writeWorkspaceFiles(workspace.root, {
+      ".env": "PUBLIC_READ_KEY=hello-world\nPRIVATE_API_KEY=foobarbaz\n",
+      ".env.prod": "PUBLIC_PROD_MODE=enabled\nPRIVATE_PROD_TOKEN=hidden\n",
+      "nested/.env": "PUBLIC_NESTED_MODE=ignored\n",
+    });
+
+    const env = await resolveEnv(workspace.root, {
+      include: ["PUBLIC_*"],
+      processEnv: "none",
+    });
+
+    expect(env.snapshot().publicKeys).toEqual(["PUBLIC_PROD_MODE", "PUBLIC_READ_KEY"]);
+    expect(env.snapshot().secretKeys).toEqual([]);
+    expect(env.get("PUBLIC_READ_KEY")).toBe("hello-world");
+    expect(env.get("PUBLIC_PROD_MODE")).toBe("enabled");
+    expect(env.get("PRIVATE_API_KEY")).toBeUndefined();
+    expect(env.get("PRIVATE_PROD_TOKEN")).toBeUndefined();
+    expect(env.get("PUBLIC_NESTED_MODE")).toBeUndefined();
+  });
 });

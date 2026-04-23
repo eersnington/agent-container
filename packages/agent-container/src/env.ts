@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { matchesGlob, resolve } from "node:path";
 
 import type {
@@ -11,11 +11,6 @@ import type {
   ResolvedEnvSnapshot,
 } from "@agent-container/types";
 
-const DEFAULT_ENV_SOURCES = [
-  { type: "file", path: ".env", optional: true },
-  { type: "file", path: ".env.local", optional: true },
-] as const;
-
 const DEFAULT_SECRET_PATTERNS = ["*_KEY", "*_TOKEN", "*_SECRET", "*_PASSWORD"] as const;
 
 const DEFAULT_PUBLIC_PATTERNS = ["PUBLIC_*"] as const;
@@ -24,19 +19,42 @@ function matchesPatterns(value: string, patterns: readonly string[]): boolean {
   return patterns.some((pattern) => matchesGlob(value, pattern));
 }
 
-function normalizeSources(policy: EnvPolicy): readonly EnvSource[] {
+export interface ResolvedEnvPolicy {
+  sources: readonly EnvSource[];
+  include: readonly string[];
+  exclude: readonly string[];
+  publicPatterns: readonly string[];
+  secretPatterns: readonly string[];
+  processEnv: ProcessEnvMode;
+}
+
+async function discoverRootEnvSources(repoRoot: string): Promise<readonly EnvSource[]> {
+  let entries: readonly string[];
+  try {
+    entries = await readdir(repoRoot);
+  } catch {
+    return [];
+  }
+
+  return entries
+    .filter((entry) => entry === ".env" || entry.startsWith(".env."))
+    .sort()
+    .map((path) => ({ type: "file", path, optional: true }) satisfies EnvSource);
+}
+
+async function normalizeSources(repoRoot: string, policy: EnvPolicy): Promise<readonly EnvSource[]> {
   if (policy.sources !== undefined && policy.sources.length > 0) {
     return policy.sources;
   }
 
-  const sources: EnvSource[] = [...DEFAULT_ENV_SOURCES];
+  const sources: EnvSource[] = [...(await discoverRootEnvSources(repoRoot))];
   if ((policy.processEnv ?? "none") !== "none") {
     sources.push({ type: "process" });
   }
   return sources;
 }
 
-function shouldIncludeName(
+export function shouldIncludeEnvName(
   name: string,
   include: readonly string[],
   exclude: readonly string[],
@@ -63,7 +81,7 @@ function classifyEnvName(
   return matchesPatterns(name, options.secretPatterns) ? "secret" : "public";
 }
 
-function parseEnvFile(content: string): Record<string, string> {
+export function parseEnvFile(content: string): Record<string, string> {
   const values: Record<string, string> = {};
 
   for (const line of content.split(/\r?\n/u)) {
@@ -99,6 +117,31 @@ function parseEnvFile(content: string): Record<string, string> {
   return values;
 }
 
+export function serializeEnvFile(values: Record<string, string>): string {
+  return Object.entries(values)
+    .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
+    .join("\n");
+}
+
+export function filterEnvValues(
+  values: Record<string, string>,
+  options: {
+    include: readonly string[];
+    exclude: readonly string[];
+  },
+): Record<string, string> {
+  const filtered: Record<string, string> = {};
+  for (const [name, value] of Object.entries(values)) {
+    if (!shouldIncludeEnvName(name, options.include, options.exclude)) {
+      continue;
+    }
+
+    filtered[name] = value;
+  }
+
+  return filtered;
+}
+
 async function loadFileSource(
   repoRoot: string,
   source: Extract<EnvSource, { type: "file" }>,
@@ -132,7 +175,7 @@ function loadProcessSource(
     }
 
     if (processEnvMode === "allow-matching") {
-      if (!shouldIncludeName(name, include, exclude)) {
+      if (!shouldIncludeEnvName(name, include, exclude)) {
         continue;
       }
     } else if (matchesPatterns(name, exclude)) {
@@ -201,19 +244,35 @@ class ResolvedEnvMap implements ResolvedEnv {
   }
 }
 
-export async function resolveEnv(repoRoot: string, policy?: EnvPolicy): Promise<ResolvedEnv> {
-  if (policy === undefined) {
-    return new ResolvedEnvMap({});
-  }
-
+export async function resolveEnvPolicy(
+  repoRoot: string,
+  policy: EnvPolicy,
+): Promise<ResolvedEnvPolicy> {
   const include = policy.include ?? [];
   const exclude = policy.exclude ?? [];
   const publicPatterns = policy.publicPatterns ?? DEFAULT_PUBLIC_PATTERNS;
   const secretPatterns = policy.secretPatterns ?? DEFAULT_SECRET_PATTERNS;
   const processEnvMode = policy.processEnv ?? "none";
 
+  return {
+    sources: await normalizeSources(repoRoot, policy),
+    include,
+    exclude,
+    publicPatterns,
+    secretPatterns,
+    processEnv: processEnvMode,
+  };
+}
+
+export async function resolveEnv(repoRoot: string, policy?: EnvPolicy): Promise<ResolvedEnv> {
+  if (policy === undefined) {
+    return new ResolvedEnvMap({});
+  }
+
+  const envPolicy = await resolveEnvPolicy(repoRoot, policy);
+
   const mergedEntries = new Map<string, { value: string; source: string }>();
-  for (const source of normalizeSources(policy)) {
+  for (const source of envPolicy.sources) {
     let values: Record<string, string>;
     let sourceName: string;
 
@@ -221,7 +280,7 @@ export async function resolveEnv(repoRoot: string, policy?: EnvPolicy): Promise<
       values = await loadFileSource(repoRoot, source);
       sourceName = `file:${source.path}`;
     } else if (source.type === "process") {
-      values = loadProcessSource(processEnvMode, include, exclude);
+      values = loadProcessSource(envPolicy.processEnv, envPolicy.include, envPolicy.exclude);
       sourceName = "process";
     } else {
       values = source.values;
@@ -235,14 +294,17 @@ export async function resolveEnv(repoRoot: string, policy?: EnvPolicy): Promise<
 
   const finalEntries: Record<string, ResolvedEnvEntry> = {};
   for (const [name, entry] of mergedEntries) {
-    if (!shouldIncludeName(name, include, exclude)) {
+    if (!shouldIncludeEnvName(name, envPolicy.include, envPolicy.exclude)) {
       continue;
     }
 
     finalEntries[name] = {
       value: entry.value,
       source: entry.source,
-      classification: classifyEnvName(name, { publicPatterns, secretPatterns }),
+      classification: classifyEnvName(name, {
+        publicPatterns: envPolicy.publicPatterns,
+        secretPatterns: envPolicy.secretPatterns,
+      }),
     };
   }
 
