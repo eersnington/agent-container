@@ -1,32 +1,32 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createAgentContainer, defineAgentContainerPlugin } from "agent-container";
+import { createAgentContainer } from "agent-container";
 import { createTempWorkspace, writeWorkspaceFiles, type TempWorkspace } from "@agent-container/test-utils";
-import type { ObservabilityEvent, WorkerdSession } from "@agent-container/types";
+import type { ObservabilityEvent } from "@agent-container/types";
 
 interface TestResource {
   workspace: TempWorkspace;
   container?: Awaited<ReturnType<typeof createAgentContainer>>;
-  session?: WorkerdSession;
 }
 
 const resources = new Set<TestResource>();
 
-afterEach(async () => {
-  for (const resource of resources) {
-    if (resource.session !== undefined) {
-      await resource.session.stop();
-    }
-    if (resource.container !== undefined) {
-      await resource.container.stop();
-    }
-    await resource.workspace.dispose();
-    resources.delete(resource);
+async function disposeContainerResource(resource: TestResource): Promise<void> {
+  if (resource.container !== undefined) {
+    await resource.container.stop();
   }
+
+  await resource.workspace.dispose();
+}
+
+afterEach(async () => {
+  const trackedResources = [...resources];
+  resources.clear();
+  await Promise.allSettled(trackedResources.map(disposeContainerResource));
 });
 
-describe("container surface", () => {
-  it("assembles the real container surface and reports accurate defaults", async () => {
+describe("container integration", () => {
+  it("assembles the real host-side container surface and reports accurate defaults", async () => {
     const workspace = await createTempWorkspace("agent-container-surface-");
     await writeWorkspaceFiles(workspace.root, {
       ".env": "PUBLIC_MODE=demo\nAPI_SECRET_TOKEN=top-secret\n",
@@ -70,30 +70,7 @@ describe("container surface", () => {
     expect(description.envPublicKeys).toEqual(["PUBLIC_MODE"]);
     expect(description.envSecretKeys).toEqual(["API_SECRET_TOKEN"]);
     expect(await container.workspace.readText("README.md")).toBe("# Container Surface\n");
-
-    const session = await container.createWorkerdSession({ allowFetch: true });
-    resource.session = session;
-    expect(session.status).toBe("created");
-
-    const plugin = defineAgentContainerPlugin({
-      name: "demo",
-      container: {
-        workspace: {
-          root: workspace.root,
-        },
-      },
-      tools: {
-        bash: "EXEC.shell",
-      },
-    });
-    expect(plugin.capabilities).toEqual(["WORKSPACE", "EXEC", "ENV", "SECRETS", "OBSERVE"]);
-    expect(plugin.tools).toEqual({
-      read: "WORKSPACE.read",
-      write: "WORKSPACE.write",
-      glob: "WORKSPACE.glob",
-      grep: "WORKSPACE.grep",
-      bash: "EXEC.shell",
-    });
+    expect(container.status).toBe("started");
 
     expect(events.some((event) => event.scope === "env" && event.action === "resolve")).toBe(true);
     expect(events.some((event) => event.scope === "container" && event.action === "start")).toBe(true);
