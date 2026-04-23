@@ -63,6 +63,7 @@ export interface WorkspaceOptions {
   root: string;
   mode?: WorkspaceMode;
   mounts?: readonly WorkspaceMount[];
+  denyRead?: readonly string[];
 }
 
 export type WorkspaceEntryKind = "file" | "directory" | "symlink" | "other";

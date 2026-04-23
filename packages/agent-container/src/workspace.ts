@@ -12,9 +12,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, matchesGlob, relative, resolve, sep } from "node:path";
 
 import type {
+  EnvPolicy,
+  EnvSource,
   MountAccessMode,
   ObservabilityEvent,
   WorkspaceController,
@@ -23,6 +25,14 @@ import type {
   WorkspaceOptions,
   WorkspaceSearchResult,
 } from "@agent-container/types";
+
+import {
+  filterEnvValues,
+  parseEnvFile,
+  type ResolvedEnvPolicy,
+  resolveEnvPolicy,
+  serializeEnvFile,
+} from "./env.js";
 
 interface MountBinding {
   mountPath: string;
@@ -39,6 +49,17 @@ class WorkspaceWriteDeniedError extends Error {}
 
 function isWorkspaceWriteDeniedError(error: unknown): error is WorkspaceWriteDeniedError {
   return error instanceof Error && error.name === "WorkspaceWriteDeniedError";
+}
+
+class WorkspaceReadDeniedError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "WorkspaceReadDeniedError";
+  }
+}
+
+function isWorkspaceReadDeniedError(error: unknown): error is WorkspaceReadDeniedError {
+  return error instanceof Error && error.name === "WorkspaceReadDeniedError";
 }
 
 type EmitEvent = (event: Omit<ObservabilityEvent, "timestamp">) => Promise<void>;
@@ -140,6 +161,19 @@ function entryKindFromStat(
   return "other";
 }
 
+function sourceLogicalPath(
+  root: string,
+  source: Extract<EnvSource, { type: "file" }>,
+): string | undefined {
+  const sourcePath = resolve(root, source.path);
+  const relativePath = relative(root, sourcePath);
+  if (relativePath === "" || relativePath.startsWith("..") || relativePath.startsWith(`..${sep}`)) {
+    return undefined;
+  }
+
+  return normalizeLogicalPath(relativePath.replace(/\\/gu, "/"));
+}
+
 export class LocalWorkspaceController implements WorkspaceController {
   public readonly root: string;
 
@@ -151,23 +185,40 @@ export class LocalWorkspaceController implements WorkspaceController {
 
   readonly #shadowRoot: string | undefined;
 
+  readonly #envPolicy: ResolvedEnvPolicy | undefined;
+
+  readonly #envSourcePaths: ReadonlySet<string>;
+
+  readonly #denyRead: readonly string[];
+
   private constructor(options: {
     root: string;
     mode: "live" | "shadow";
     mounts: readonly MountBinding[];
     shadowRoot?: string;
     emit?: EmitEvent;
+    envPolicy?: ResolvedEnvPolicy;
+    denyRead: readonly string[];
   }) {
     this.root = options.root;
     this.mode = options.mode;
     this.#mounts = options.mounts;
     this.#shadowRoot = options.shadowRoot;
     this.#emit = options.emit;
+    this.#envPolicy = options.envPolicy;
+    this.#denyRead = options.denyRead;
+    this.#envSourcePaths = new Set(
+      options.envPolicy?.sources
+        .filter((source): source is Extract<EnvSource, { type: "file" }> => source.type === "file")
+        .map((source) => sourceLogicalPath(options.root, source))
+        .filter((path): path is string => path !== undefined) ?? [],
+    );
   }
 
   public static async create(
     options: WorkspaceOptions,
     emit?: EmitEvent,
+    policy?: { env?: EnvPolicy },
   ): Promise<LocalWorkspaceController> {
     const workspaceRoot = resolve(options.root);
     const mode = options.mode ?? "live";
@@ -198,6 +249,8 @@ export class LocalWorkspaceController implements WorkspaceController {
     }
 
     mounts.sort((left, right) => right.mountPath.length - left.mountPath.length);
+    const envPolicy =
+      policy?.env === undefined ? undefined : await resolveEnvPolicy(activeRoot, policy.env);
 
     return new LocalWorkspaceController({
       root: activeRoot,
@@ -205,12 +258,28 @@ export class LocalWorkspaceController implements WorkspaceController {
       mounts,
       shadowRoot,
       emit,
+      envPolicy,
+      denyRead: options.denyRead ?? [],
     });
   }
 
   public async read(path: string): Promise<Uint8Array> {
     try {
       const target = await this.#resolveTarget(path);
+      const envContent = await this.#tryReadEnvSource(target);
+      if (envContent !== undefined) {
+        const content = Buffer.from(envContent, "utf8");
+        await this.#emitEvent({
+          scope: "workspace",
+          action: "read",
+          outcome: "success",
+          target: target.logicalPath,
+          detail: `${content.byteLength} bytes`,
+        });
+        return content;
+      }
+
+      await this.#assertReadable(target.logicalPath);
       const content = await readFile(target.physicalPath);
       await this.#emitEvent({
         scope: "workspace",
@@ -221,7 +290,9 @@ export class LocalWorkspaceController implements WorkspaceController {
       });
       return content;
     } catch (error) {
-      await this.#emitFailure("read", path, error);
+      if (!isWorkspaceReadDeniedError(error)) {
+        await this.#emitFailure("read", path, error);
+      }
       throw error;
     }
   }
@@ -359,7 +430,16 @@ export class LocalWorkspaceController implements WorkspaceController {
           continue;
         }
 
-        const content = await this.readText(path);
+        let content: string;
+        try {
+          content = await this.readText(path);
+        } catch (error) {
+          if (isWorkspaceReadDeniedError(error)) {
+            continue;
+          }
+
+          throw error;
+        }
         const lines = content.split(/\r?\n/u);
         for (const [index, line] of lines.entries()) {
           const haystack = caseSensitive ? line : line.toLowerCase();
@@ -482,6 +562,32 @@ export class LocalWorkspaceController implements WorkspaceController {
       logicalPath,
       physicalPath: unresolvedPhysicalPath,
     };
+  }
+
+  async #tryReadEnvSource(target: ResolvedTarget): Promise<string | undefined> {
+    if (!this.#envSourcePaths.has(target.logicalPath) || this.#envPolicy === undefined) {
+      return undefined;
+    }
+
+    const content = await readFile(target.physicalPath, "utf8");
+    const filtered = filterEnvValues(parseEnvFile(content), this.#envPolicy);
+    return serializeEnvFile(filtered);
+  }
+
+  async #assertReadable(logicalPath: string): Promise<void> {
+    const isEnvLike = logicalPath
+      .split("/")
+      .some((segment) => segment === ".env" || segment.startsWith(".env."));
+    const isDenied = this.#denyRead.some((pattern) => matchesGlob(logicalPath, pattern));
+    if (isEnvLike || isDenied) {
+      await this.#emitEvent({
+        scope: "workspace",
+        action: "read-denied",
+        outcome: "denied",
+        target: logicalPath,
+      });
+      throw new WorkspaceReadDeniedError(`Path is not readable: ${logicalPath}`);
+    }
   }
 
   async #emitEvent(event: Omit<ObservabilityEvent, "timestamp">): Promise<void> {
