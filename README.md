@@ -1,10 +1,14 @@
-<h3 align="center">agent-container</h3>
+# Agent Container 
 
-<p align="center">
-  Give your agents tiny boxes, powered by <a href="https://github.com/cloudflare/workerd">workerd</a><br />
-  Agent Container is a workerd-based sandbox designed to give coding agents isolated execution environments, providing structured bindings (workspace, exec, env) scoped to a single repository rather than the host system. It's ideal for AI coding tools, agent frameworks, and platforms that need to run untrusted code with fine-grained capability control.
-</p>
+### Give your agents tiny boxes, powered by [workerd](https://github.com/cloudflare/workerd)
 
+> ⚠️ This project is under active development. APIs may change.
+
+Agent Container is a workerd-based sandbox for running untrusted code from AI agents. It exposes structured capability bindings (filesystem, exec, env) scoped to a single repository, rather than giving agents raw access to the host system.
+
+It's useful for coding assistants, autonomous agents, and any platform that needs to run agent-generated code with fine-grained control over what that code can access.
+
+--- 
 <p align="center">
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#why">Why</a> &middot;
@@ -60,7 +64,7 @@ The code inside `workerd` cannot access `fs`, `process`, or `child_process` dire
 
 Coding agents need to work inside real projects: reading files, writing code, running scripts, using environment variables. But giving an agent unrestricted access to your machine is dangerous, and dropping it into a fake environment breaks too many real-world workflows.
 
-**agent-container** solves this by running agent code inside [workerd](https://github.com/cloudflare/workerd) while keeping all real authority in a Node.js host process. The agent gets a natural development experience. You keep control.
+**agent-container** solves this by running agent code inside workerd while keeping all real authority in a Node.js host process. The agent gets a natural development experience. You keep control.
 
 | Problem | Solution |
 |---------|----------|
@@ -110,8 +114,6 @@ Coding agents need to work inside real projects: reading files, writing code, ru
 │  No direct fs, process, or child_process access                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
-
-**Two runtimes, one boundary:**
 
 - **Host (Node.js)** owns all real authority: filesystem, environment, subprocesses, network policy, observability
 - **Guest (workerd)** runs agent code with only the capabilities explicitly granted through bindings
