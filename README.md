@@ -29,7 +29,7 @@ That distinction is the point of this project. Agent Container gives coding agen
 <p align="center">
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#why">Why</a> &middot;
-  <a href="#threat-model"</a> &middot;
+  <a href="#threat-model">Threat Model</a> &middot;
   <a href="#how-it-works">How It Works</a> &middot;
   <a href="#bindings">Bindings</a> &middot;
   <a href="#api">API</a> &middot;
@@ -145,6 +145,8 @@ Implemented today:
 - `WORKSPACE` supports `readText`, `writeText`, `list`, `stat`, `glob`, `grep`, and `remove`.
 - Workspace mode can be `live` or `shadow`; `shadow` copies the repository to a disposable temp directory.
 - Workspace mounts can expose additional paths as read-only or read-write logical mount points.
+- Workspace reads are env-aware: root `.env*` sources are exposed as filtered dotenv views, and env-like files outside configured env sources are denied.
+- `workspace.denyRead` can deny additional non-env paths from `WORKSPACE.readText` and `WORKSPACE.grep`.
 - `EXEC.run` starts allowlisted host commands with workspace-scoped cwd resolution, timeout handling, and selected env projection.
 - `EXEC.shell` exists, but only works when `allowShell` is enabled.
 - `ENV` exposes public variables and `SECRETS` exposes secret-classified variables.
@@ -199,6 +201,38 @@ const container = await createAgentContainer({
 
 The workspace controller resolves logical paths against the matching mount and rejects path traversal outside that mount's physical root.
 
+Env file reads:
+
+```ts
+const container = await createAgentContainer({
+  workspace: { root: process.cwd() },
+  env: {
+    include: ["PUBLIC_*"],
+    processEnv: "none",
+  },
+});
+
+const envFile = await WORKSPACE.readText(".env");
+// PUBLIC_READ_KEY="hello-world"
+```
+
+If `env.sources` is omitted, root-level `.env` and `.env.*` files are treated as env sources. Reading one of those files through `WORKSPACE` returns a synthetic dotenv file filtered by the same `env.include` and `env.exclude` rules used by `ENV`.
+
+If `env.sources` is provided, only those file sources are readable as filtered env files. Other env-like files, such as `.env.local` when only `.env` is configured, are denied with `Path is not readable: <path>`.
+
+Additional read denies:
+
+```ts
+const container = await createAgentContainer({
+  workspace: {
+    root: process.cwd(),
+    denyRead: ["**/*.secret"],
+  },
+});
+```
+
+`denyRead` applies to non-env file content reads and search. It does not select env sources; use `env.sources` for that. `list`, `stat`, and `glob` may still reveal filenames.
+
 ### EXEC
 
 `EXEC` is brokered subprocess execution.
@@ -251,7 +285,7 @@ const token = await SECRETS.get("API_SECRET_TOKEN");
 const secretKeys = await SECRETS.keys();
 ```
 
-Env policy can load from `.env`, `.env.local`, inline values, and selected process env values:
+Env policy can load from root `.env*` files, explicit file sources, inline values, and selected process env values:
 
 ```ts
 const container = await createAgentContainer({
@@ -261,6 +295,19 @@ const container = await createAgentContainer({
     exclude: ["PUBLIC_DEBUG_ONLY"],
     processEnv: "allow-matching",
     secretPatterns: ["*_KEY", "*_TOKEN", "*_SECRET", "*_PASSWORD"],
+  },
+});
+```
+
+When `sources` is omitted, Agent Container discovers root-level `.env` and `.env.*` files. When `sources` is provided, only those sources are used.
+
+```ts
+const container = await createAgentContainer({
+  workspace: { root: process.cwd() },
+  env: {
+    sources: [{ type: "file", path: ".env" }],
+    include: ["PUBLIC_*"],
+    processEnv: "none",
   },
 });
 ```
@@ -320,11 +367,13 @@ interface AgentContainerOptions {
       sourcePath: string;
       mode: "ro" | "rw";
     }[];
+    denyRead?: readonly string[];
   };
   env?: {
     sources?: readonly EnvSource[];
     include?: readonly string[];
     exclude?: readonly string[];
+    publicPatterns?: readonly string[];
     secretPatterns?: readonly string[];
     processEnv?: "none" | "allow-matching" | "all";
   };
