@@ -18,6 +18,8 @@ const DEFAULT_ENV_SOURCES = [
 
 const DEFAULT_SECRET_PATTERNS = ["*_KEY", "*_TOKEN", "*_SECRET", "*_PASSWORD"] as const;
 
+const DEFAULT_PUBLIC_PATTERNS = ["PUBLIC_*"] as const;
+
 function matchesPatterns(value: string, patterns: readonly string[]): boolean {
   return patterns.some((pattern) => matchesGlob(value, pattern));
 }
@@ -45,6 +47,20 @@ function shouldIncludeName(
   }
 
   return !matchesPatterns(name, exclude);
+}
+
+function classifyEnvName(
+  name: string,
+  options: {
+    publicPatterns: readonly string[];
+    secretPatterns: readonly string[];
+  },
+): EnvClassification {
+  if (matchesPatterns(name, options.publicPatterns)) {
+    return "public";
+  }
+
+  return matchesPatterns(name, options.secretPatterns) ? "secret" : "public";
 }
 
 function parseEnvFile(content: string): Record<string, string> {
@@ -192,6 +208,7 @@ export async function resolveEnv(repoRoot: string, policy?: EnvPolicy): Promise<
 
   const include = policy.include ?? [];
   const exclude = policy.exclude ?? [];
+  const publicPatterns = policy.publicPatterns ?? DEFAULT_PUBLIC_PATTERNS;
   const secretPatterns = policy.secretPatterns ?? DEFAULT_SECRET_PATTERNS;
   const processEnvMode = policy.processEnv ?? "none";
 
@@ -225,7 +242,7 @@ export async function resolveEnv(repoRoot: string, policy?: EnvPolicy): Promise<
     finalEntries[name] = {
       value: entry.value,
       source: entry.source,
-      classification: matchesPatterns(name, secretPatterns) ? "secret" : "public",
+      classification: classifyEnvName(name, { publicPatterns, secretPatterns }),
     };
   }
 

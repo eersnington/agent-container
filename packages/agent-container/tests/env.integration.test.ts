@@ -41,6 +41,7 @@ describe("env integration", () => {
             type: "inline",
             values: {
               PUBLIC_MODE: "inline",
+              PUBLIC_READ_KEY: "public-key",
               INLINE_FLAG: "enabled",
               API_SECRET_TOKEN: "inline-secret",
             },
@@ -55,9 +56,11 @@ describe("env integration", () => {
         "PUBLIC_FILE_ONLY",
         "PUBLIC_LOCAL_ONLY",
         "PUBLIC_MODE",
+        "PUBLIC_READ_KEY",
       ]);
       expect(snapshot.secretKeys).toEqual(["API_SECRET_TOKEN"]);
       expect(env.get("PUBLIC_MODE")).toBe("inline");
+      expect(env.get("PUBLIC_READ_KEY")).toBe("public-key");
       expect(env.get("PROCESS_VISIBLE")).toBe("from-process");
       expect(env.get("PROCESS_BLOCKED")).toBeUndefined();
       expect(env.getClassification("API_SECRET_TOKEN")).toBe("secret");
@@ -67,6 +70,7 @@ describe("env integration", () => {
         PUBLIC_FILE_ONLY: "base",
         PUBLIC_LOCAL_ONLY: "local",
         PUBLIC_MODE: "inline",
+        PUBLIC_READ_KEY: "public-key",
       });
       expect(env.toObject({ includeSecrets: true })).toMatchObject({
         API_SECRET_TOKEN: "inline-secret",

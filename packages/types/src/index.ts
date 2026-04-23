@@ -29,6 +29,7 @@ export interface EnvPolicy {
   sources?: readonly EnvSource[];
   include?: readonly string[];
   exclude?: readonly string[];
+  publicPatterns?: readonly string[];
   secretPatterns?: readonly string[];
   processEnv?: ProcessEnvMode;
 }
