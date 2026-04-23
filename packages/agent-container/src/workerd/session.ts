@@ -250,6 +250,7 @@ export class LocalWorkerdSession implements WorkerdSession {
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(
         `Failed to start workerd session: ${reason}${this.#stderr === "" ? "" : `\n${this.#stderr}`}`,
+        { cause: error },
       );
     }
   }
@@ -281,7 +282,7 @@ export class LocalWorkerdSession implements WorkerdSession {
         outcome: "error",
         detail,
       });
-      throw new Error(`Failed to run workerd session: ${detail}`);
+      throw new Error(`Failed to run workerd session: ${detail}`, { cause: error });
     }
 
     let body: ParsedRunResponse;
@@ -295,7 +296,7 @@ export class LocalWorkerdSession implements WorkerdSession {
         outcome: "error",
         detail,
       });
-      throw new Error(`Failed to parse workerd run response: ${detail}`);
+      throw new Error(`Failed to parse workerd run response: ${detail}`, { cause: error });
     }
 
     const durationMs = performance.now() - startedAt;
