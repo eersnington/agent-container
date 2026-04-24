@@ -63,19 +63,18 @@ await container.start();
 
 const session = await container.createWorkerdSession();
 
-const { result } = await session.run({
-  source: {
-    type: "code",
+const { result } = await session.run(
+  `
+    export async function run({ WORKSPACE, EXEC }) {
+      const pkg = await WORKSPACE.readText("package.json");
+      const { stdout } = await EXEC.run({ command: "node", args: ["--version"] });
+      return { name: JSON.parse(pkg).name, node: stdout.trim() };
+    }
+  `,
+  {
     language: "ts",
-    code: `
-      export async function run({ WORKSPACE, EXEC }) {
-        const pkg = await WORKSPACE.readText("package.json");
-        const { stdout } = await EXEC.run({ command: "node", args: ["--version"] });
-        return { name: JSON.parse(pkg).name, node: stdout.trim() };
-      }
-    `,
   },
-});
+);
 
 console.log(result);
 // { name: "my-project", node: "v22.0.0" }
@@ -408,13 +407,10 @@ const session = await container.createWorkerdSession({
   allowFetch: false,
 });
 
-const { result, logs, durationMs } = await session.run({
-  source: {
-    type: "path",
-    path: "scripts/check.ts",
-  },
-  timeoutMs: 5_000,
-});
+const { result, logs, durationMs } = await session.run(
+  { path: "scripts/check.ts" },
+  { timeoutMs: 5_000 },
+);
 
 await session.stop();
 ```

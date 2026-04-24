@@ -3,18 +3,19 @@ import { dirname, extname, posix, relative, sep } from "node:path";
 import { transform } from "esbuild";
 
 import type {
-  WorkerdRunSource,
+  WorkerdRunInput,
+  WorkerdRunOptions,
   WorkerdSourceLanguage,
   WorkspaceController,
 } from "@agent-container/types";
 
-export type WorkerdModuleKind = "esModule" | "json" | "text";
+export type WorkerdModuleKind = "esModule" | "json" | "text" | "wasm";
 
 export interface PreparedWorkerdModule {
   name: string;
   fileName: string;
   kind: WorkerdModuleKind;
-  content: string;
+  content: string | Uint8Array;
 }
 
 export interface PreparedWorkerdRun {
@@ -24,15 +25,23 @@ export interface PreparedWorkerdRun {
 
 interface ModuleSource {
   name: string;
-  content: string;
-  language: WorkerdSourceLanguage | "json" | "text";
+  content: string | Uint8Array;
+  language: WorkerdSourceLanguage | "json" | "text" | "wasm";
 }
 
 interface StaticImport {
   specifier: string;
 }
 
-const moduleExtensions = [".ts", ".tsx", ".js", ".mjs", ".json", ".txt"] as const;
+const supportedStaticModuleExtensions = [
+  ".ts",
+  ".tsx",
+  ".js",
+  ".mjs",
+  ".json",
+  ".txt",
+  ".wasm",
+] as const;
 
 function normalizeModuleName(path: string): string {
   return path.replace(/\\/gu, "/").replace(/^\.\/+/u, "");
@@ -59,6 +68,9 @@ function languageFromName(name: string): ModuleSource["language"] {
   }
   if (extension === ".txt") {
     return "text";
+  }
+  if (extension === ".wasm") {
+    return "wasm";
   }
   return "js";
 }
@@ -110,7 +122,9 @@ async function resolveWorkspaceModule(options: {
   const extension = extname(baseName);
   const candidates =
     extension === ""
-      ? moduleExtensions.map((candidateExtension) => `${baseName}${candidateExtension}`)
+      ? supportedStaticModuleExtensions.map(
+          (candidateExtension) => `${baseName}${candidateExtension}`,
+        )
       : extension === ".js"
         ? [
             baseName,
@@ -159,9 +173,24 @@ async function transformModuleSource(options: {
       ? "json"
       : options.module.language === "text"
         ? "text"
-        : "esModule";
+        : options.module.language === "wasm"
+          ? "wasm"
+          : "esModule";
 
   let content = options.module.content;
+  if (options.module.language === "wasm") {
+    return {
+      name: options.module.name,
+      fileName: moduleFileName(options.module.name),
+      kind,
+      content,
+    };
+  }
+
+  if (typeof content !== "string") {
+    throw new Error(`Expected text module content for ${options.module.name}.`);
+  }
+
   for (const [from, to] of options.importRewrites) {
     content = rewriteSpecifier(content, from, to);
   }
@@ -189,15 +218,17 @@ async function transformModuleSource(options: {
 }
 
 async function createEntrySource(
-  source: WorkerdRunSource,
+  input: WorkerdRunInput,
+  options: WorkerdRunOptions | undefined,
   workspace: WorkspaceController | undefined,
 ): Promise<ModuleSource> {
-  if (source.type === "code") {
-    const name = normalizeModuleName(source.name ?? `entry.${source.language === "js" ? "js" : source.language}`);
+  if (typeof input === "string") {
+    const language = options?.language ?? "js";
+    const name = normalizeModuleName(options?.name ?? `entry.${language}`);
     return {
       name,
-      content: source.code,
-      language: source.language,
+      content: input,
+      language,
     };
   }
 
@@ -205,25 +236,27 @@ async function createEntrySource(
     throw new Error("Path sources require a workspace capability.");
   }
 
-  const name = normalizeModuleName(source.path);
+  const name = normalizeModuleName(input.path);
   const physicalPath = await workspace.resolvePath(name);
   const rootRelativePath = relative(workspace.root, physicalPath);
   if (rootRelativePath.startsWith("..") || rootRelativePath.startsWith(`..${sep}`)) {
-    throw new Error(`Path escapes workspace root: ${source.path}`);
+    throw new Error(`Path escapes workspace root: ${input.path}`);
   }
+  const language = languageFromName(name);
 
   return {
     name,
-    content: await workspace.readText(name),
-    language: languageFromName(name),
+    content: language === "wasm" ? await workspace.read(name) : await workspace.readText(name),
+    language,
   };
 }
 
 export async function prepareWorkerdRun(options: {
-  source: WorkerdRunSource;
+  input: WorkerdRunInput;
+  options?: WorkerdRunOptions;
   workspace?: WorkspaceController;
 }): Promise<PreparedWorkerdRun> {
-  const entry = await createEntrySource(options.source, options.workspace);
+  const entry = await createEntrySource(options.input, options.options, options.workspace);
   const modules = new Map<string, ModuleSource>();
   const importRewritesByModule = new Map<string, Map<string, string>>();
   const pending: ModuleSource[] = [entry];
@@ -234,7 +267,11 @@ export async function prepareWorkerdRun(options: {
       continue;
     }
 
-    if (current.language !== "json" && current.language !== "text") {
+    if (
+      typeof current.content === "string" &&
+      current.language !== "json" &&
+      current.language !== "text"
+    ) {
       assertNoUnsupportedImports(current.content, current.name);
     }
 
@@ -242,12 +279,20 @@ export async function prepareWorkerdRun(options: {
     const rewrites = new Map<string, string>();
     importRewritesByModule.set(current.name, rewrites);
 
-    if (current.language === "json" || current.language === "text") {
+    if (
+      current.language === "json" ||
+      current.language === "text" ||
+      current.language === "wasm"
+    ) {
+      continue;
+    }
+
+    if (typeof current.content !== "string") {
       continue;
     }
 
     for (const { specifier } of extractStaticImports(current.content)) {
-      if (options.source.type === "code") {
+      if (typeof options.input === "string") {
         throw new Error("Relative imports are only supported for workspace path sources.");
       }
       if (options.workspace === undefined) {
@@ -261,10 +306,14 @@ export async function prepareWorkerdRun(options: {
       });
       rewrites.set(specifier, relativeSpecifier(current.name, resolvedName));
       if (!modules.has(resolvedName)) {
+        const language = languageFromName(resolvedName);
         pending.push({
           name: resolvedName,
-          content: await options.workspace.readText(resolvedName),
-          language: languageFromName(resolvedName),
+          content:
+            language === "wasm"
+              ? await options.workspace.read(resolvedName)
+              : await options.workspace.readText(resolvedName),
+          language,
         });
       }
     }

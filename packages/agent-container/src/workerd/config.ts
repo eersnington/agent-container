@@ -5,12 +5,11 @@ export const DEFAULT_COMPATIBILITY_DATE = "2026-04-20";
 export interface WorkerdConfigModule {
   name: string;
   fileName: string;
-  kind: "esModule" | "json" | "text";
+  kind: "esModule" | "json" | "text" | "wasm";
 }
 
 export interface WorkerdConfigOptions extends WorkerdSessionOptions {
   modules: readonly WorkerdConfigModule[];
-  compatibilityFlags?: readonly string[];
 }
 
 function escapeCapnpString(value: string): string {
@@ -96,7 +95,13 @@ export function buildConfig(
   const modules = options.modules
     .map((module) => {
       const field =
-        module.kind === "esModule" ? "esModule" : module.kind === "json" ? "json" : "text";
+        module.kind === "esModule"
+          ? "esModule"
+          : module.kind === "json"
+            ? "json"
+            : module.kind === "text"
+              ? "text"
+              : "wasm";
       return `    ( name = "${escapeCapnpString(module.name)}", ${field} = embed "${escapeCapnpString(module.fileName)}" ),`;
     })
     .join("\n");

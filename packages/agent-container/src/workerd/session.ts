@@ -6,6 +6,7 @@ import type { Readable } from "node:stream";
 
 import type {
   ObservabilityEvent,
+  WorkerdRunInput,
   WorkerdRunOptions,
   WorkerdRunResult,
   WorkerdSession,
@@ -146,10 +147,10 @@ async function terminateProcess(
         }
 
         child.kill("SIGKILL");
-      }, 100);
+      }, 1_000);
     }
 
-    forceResolveTimeout = setTimeout(finalize, 500);
+    forceResolveTimeout = setTimeout(finalize, 2_000);
   });
 }
 
@@ -199,13 +200,10 @@ export class LocalWorkerdSession implements WorkerdSession {
   }
 
   public async start(): Promise<void> {
-    await this.#startWithPreparedRun(undefined, []);
+    await this.#startWithPreparedRun(undefined);
   }
 
-  async #startWithPreparedRun(
-    preparedRun: PreparedWorkerdRun | undefined,
-    compatibilityFlags: readonly string[],
-  ): Promise<void> {
+  async #startWithPreparedRun(preparedRun: PreparedWorkerdRun | undefined): Promise<void> {
     if (this.#status === "started") {
       return;
     }
@@ -229,13 +227,16 @@ export class LocalWorkerdSession implements WorkerdSession {
       for (const module of modules) {
         const filePath = join(tempDir, module.fileName);
         await mkdir(dirname(filePath), { recursive: true });
-        await writeFile(filePath, module.content, "utf8");
+        if (typeof module.content === "string") {
+          await writeFile(filePath, module.content, "utf8");
+        } else {
+          await writeFile(filePath, module.content);
+        }
       }
       await writeFile(
         join(tempDir, "config.capnp"),
         buildConfig(this.port, this.#bridge.port, this.#bridge.token, {
           ...this.#options,
-          compatibilityFlags,
           modules,
         }),
         "utf8",
@@ -282,14 +283,17 @@ export class LocalWorkerdSession implements WorkerdSession {
     }
   }
 
-  public async run(options: WorkerdRunOptions): Promise<WorkerdRunResult> {
+  public async run(
+    input: WorkerdRunInput,
+    options: WorkerdRunOptions = {},
+  ): Promise<WorkerdRunResult> {
     const preparedRun = await prepareWorkerdRun({
-      source: options.source,
+      input,
+      options,
       workspace: this.#context.workspace,
     });
-    const compatibilityFlags = options.compatibilityFlags ?? [];
     await this.stop();
-    await this.#startWithPreparedRun(preparedRun, compatibilityFlags);
+    await this.#startWithPreparedRun(preparedRun);
 
     const startedAt = performance.now();
     let response: Response;

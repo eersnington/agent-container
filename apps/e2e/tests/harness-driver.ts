@@ -86,15 +86,14 @@ export async function createHarnessDriver(
       return events;
     },
     async run(code: string, env?: Record<string, string>): Promise<WorkerdRunResult> {
-      return await session.run({
-        source: {
-          type: "code",
+      return await session.run(
+        `export async function run({ WORKSPACE, EXEC, ENV, SECRETS, OBSERVE, env }) {\n${code}\n}`,
+        {
           language: "js",
-          code: `export async function run({ WORKSPACE, EXEC, ENV, SECRETS, OBSERVE, env }) {\n${code}\n}`,
+          env,
+          timeoutMs: 10_000,
         },
-        env,
-        timeoutMs: 10_000,
-      });
+      );
     },
     async readSeedFile(path: string): Promise<string> {
       return await readFile(join(seedWorkspace.root, path), "utf8");

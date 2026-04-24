@@ -153,29 +153,18 @@ export interface WorkerdSessionOptions {
   allowedFetchOrigins?: readonly string[];
   startupTimeoutMs?: number;
   compatibilityDate?: string;
+  compatibilityFlags?: readonly string[];
   workerdBinary?: string;
 }
 
-export interface WorkerdCodeSource {
-  type: "code";
-  code: string;
-  language: WorkerdSourceLanguage;
-  name?: string;
-}
-
-export interface WorkerdPathSource {
-  type: "path";
-  path: string;
-}
-
-export type WorkerdRunSource = WorkerdCodeSource | WorkerdPathSource;
+export type WorkerdRunInput = string | { path: string };
 
 export interface WorkerdRunOptions {
-  source: WorkerdRunSource;
+  language?: WorkerdSourceLanguage;
+  name?: string;
   exportName?: string;
   timeoutMs?: number;
   env?: Record<string, string>;
-  compatibilityFlags?: readonly string[];
 }
 
 export interface WorkerdRunResult {
@@ -188,7 +177,7 @@ export interface WorkerdSession {
   readonly port: number;
   readonly status: "created" | "started" | "stopped";
   start(): Promise<void>;
-  run(options: WorkerdRunOptions): Promise<WorkerdRunResult>;
+  run(input: WorkerdRunInput, options?: WorkerdRunOptions): Promise<WorkerdRunResult>;
   stop(): Promise<void>;
 }
 

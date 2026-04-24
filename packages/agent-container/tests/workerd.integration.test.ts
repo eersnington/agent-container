@@ -1,3 +1,6 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createAgentContainer } from "agent-container";
@@ -9,6 +12,10 @@ interface WorkerdResource {
 }
 
 const resources = new Set<WorkerdResource>();
+
+const addWasmModule = Uint8Array.from(
+  Buffer.from("0061736d0100000001070160027f7f017f030201000707010361646400000a09010700200020016a0b", "hex"),
+);
 
 async function disposeWorkerdResource(resource: WorkerdResource): Promise<void> {
   if (resource.container !== undefined) {
@@ -57,31 +64,18 @@ describe("workerd module execution", () => {
     const session = await container.createWorkerdSession();
 
     await expect(
-      session.run({
-        source: {
-          type: "code",
-          language: "js",
-          code: "export function run() { return 'js-ok'; }",
-        },
-      }),
+      session.run("export function run() { return 'js-ok'; }", { language: "js" }),
     ).resolves.toMatchObject({ result: "js-ok" });
 
     await expect(
-      session.run({
-        source: {
-          type: "code",
-          language: "ts",
-          code: "export function run(): number { const value: number = 42; return value; }",
-        },
+      session.run("export function run(): number { const value: number = 42; return value; }", {
+        language: "ts",
       }),
     ).resolves.toMatchObject({ result: 42 });
 
     await expect(
-      session.run({
-        source: {
-          type: "code",
-          language: "tsx",
-          code: `
+      session.run(
+        `
             function h(type: string): { type: string } {
               return { type };
             }
@@ -91,8 +85,10 @@ describe("workerd module execution", () => {
               return value.type;
             }
           `,
+        {
+          language: "tsx",
         },
-      }),
+      ),
     ).resolves.toMatchObject({ result: "span" });
   });
 
@@ -118,8 +114,7 @@ describe("workerd module execution", () => {
     const session = await container.createWorkerdSession();
 
     await expect(
-      session.run({
-        source: { type: "path", path: "src/task.ts" },
+      session.run({ path: "src/task.ts" }, {
         env: { value: "ok" },
       }),
     ).resolves.toMatchObject({
@@ -148,8 +143,7 @@ describe("workerd module execution", () => {
     const session = await container.createWorkerdSession();
 
     await expect(
-      session.run({
-        source: { type: "path", path: "src/task.ts" },
+      session.run({ path: "src/task.ts" }, {
         exportName: "inspect",
       }),
     ).resolves.toMatchObject({
@@ -169,22 +163,38 @@ describe("workerd module execution", () => {
     const session = await container.createWorkerdSession();
 
     await expect(
-      session.run({ source: { type: "path", path: "src/bare.ts" } }),
+      session.run({ path: "src/bare.ts" }),
     ).rejects.toThrow("Only static relative imports are supported");
     await expect(
-      session.run({ source: { type: "path", path: "src/dynamic.ts" } }),
+      session.run({ path: "src/dynamic.ts" }),
     ).rejects.toThrow("Dynamic imports are not supported");
     await expect(
-      session.run({ source: { type: "path", path: "src/value.ts" } }),
+      session.run({ path: "src/value.ts" }),
     ).rejects.toThrow("Module must export a run(ctx) function or a default function.");
+  });
+
+  it("imports native wasm modules through workerd", async () => {
+    const { container, workspace } = await createTestContainer({
+      "src/task.ts": `
+        import addModule from "./add.wasm";
+
+        export async function run() {
+          const instance = await WebAssembly.instantiate(addModule);
+          const add = instance.exports.add as (left: number, right: number) => number;
+          return add(2, 3);
+        }
+      `,
+    });
+    await writeFile(join(workspace.root, "src/add.wasm"), addWasmModule);
+    const session = await container.createWorkerdSession();
+
+    await expect(session.run({ path: "src/task.ts" })).resolves.toMatchObject({ result: 5 });
   });
 
   it("rejects path source escapes before module generation", async () => {
     const { container } = await createTestContainer({});
     const session = await container.createWorkerdSession();
 
-    await expect(session.run({ source: { type: "path", path: "../outside.ts" } })).rejects.toThrow(
-      "Path escapes workspace root",
-    );
+    await expect(session.run({ path: "../outside.ts" })).rejects.toThrow("Path escapes workspace root");
   });
 });
