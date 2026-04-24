@@ -6,7 +6,7 @@ export {
 export { resolveEnv } from "./env.js";
 export { LocalCapabilityBridgeServer } from "./bridge.js";
 export { LocalExecController } from "./exec.js";
-export { createWorkerdSession, LocalWorkerdSession } from "./workerd/index.js";
+export { createWorkerdSession, LocalWorkerdSession, WorkerdRunError } from "./workerd/index.js";
 export { LocalWorkspaceController } from "./workspace.js";
 
 export type {
@@ -29,10 +29,13 @@ export type {
   ResolvedEnv,
   ResolvedEnvEntry,
   ResolvedEnvSnapshot,
+  WorkerdRunInput,
+  WorkerdRunErrorDetails,
   WorkerdRunOptions,
   WorkerdRunResult,
   WorkerdSession,
   WorkerdSessionOptions,
+  WorkerdSourceLanguage,
   WorkspaceController,
   WorkspaceEntry,
   WorkspaceEntryKind,

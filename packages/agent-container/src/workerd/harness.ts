@@ -1,5 +1,20 @@
-export function workerHarnessSource(): string {
-  return `function formatValue(value) {
+function escapeJsString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function relativeEntrySpecifier(entryModuleName: string): string {
+  return entryModuleName.startsWith(".") ? entryModuleName : `./${entryModuleName}`;
+}
+
+export function workerHarnessSource(entryModuleName: string | undefined): string {
+  const importLine =
+    entryModuleName === undefined
+      ? "const entryModule = {};"
+      : `import * as entryModule from ${escapeJsString(relativeEntrySpecifier(entryModuleName))};`;
+
+  return `${importLine}
+
+function formatValue(value) {
   if (typeof value === "string") {
     return value;
   }
@@ -25,6 +40,20 @@ function createLogger(logs) {
     info(...args) {
       logs.push(args.map(formatValue).join(" "));
     },
+  };
+}
+
+function serializeError(error) {
+  if (error instanceof Error) {
+    return {
+      name: typeof error.name === "string" && error.name !== "" ? error.name : undefined,
+      message: typeof error.message === "string" ? error.message : String(error),
+      stack: typeof error.stack === "string" ? error.stack : undefined,
+    };
+  }
+
+  return {
+    message: formatValue(error),
   };
 }
 
@@ -111,32 +140,37 @@ function createBridgeBindings(env) {
   };
 }
 
-async function runCode(code, userEnv, bindings, logs, unsafeEval) {
+async function runModule(body, env, logs) {
+  const exportName = typeof body.exportName === "string" ? body.exportName : "run";
+  const candidate =
+    exportName in entryModule
+      ? entryModule[exportName]
+      : exportName === "run"
+        ? entryModule.default
+        : undefined;
+
+  if (typeof candidate !== "function") {
+    throw new Error(
+      exportName === "run"
+        ? "Module must export a run(ctx) function or a default function."
+        : "Module export is not a function: " + exportName,
+    );
+  }
+
+  const bindings = createBridgeBindings(env);
   const logger = createLogger(logs);
-  const state = globalThis.__agentContainerState ?? (globalThis.__agentContainerState = {});
-  if (unsafeEval === undefined || typeof unsafeEval.eval !== "function") {
-    throw new Error("UnsafeEval binding is not available.");
+  const previousConsole = globalThis.console;
+  globalThis.console = logger;
+  try {
+    return await candidate({
+      ...bindings,
+      env: body.userEnv ?? {},
+      input: body.input,
+      console: logger,
+    });
+  } finally {
+    globalThis.console = previousConsole;
   }
-
-  const fn = unsafeEval.eval(
-    '(async function (env, console, WORKSPACE, EXEC, ENV, SECRETS, OBSERVE, STATE) {"use strict";\\n' +
-      code +
-      '\\n})',
-  );
-  if (typeof fn !== "function") {
-    throw new Error("UnsafeEval did not produce an executable function.");
-  }
-
-  return await fn(
-    userEnv ?? {},
-    logger,
-    bindings.WORKSPACE,
-    bindings.EXEC,
-    bindings.ENV,
-    bindings.SECRETS,
-    bindings.OBSERVE,
-    state,
-  );
 }
 
 export default {
@@ -153,19 +187,12 @@ export default {
 
     const body = await request.json();
     const logs = [];
-    const bindings = createBridgeBindings(env);
     try {
-      const result = await runCode(
-        String(body.code ?? ""),
-        body.userEnv ?? {},
-        bindings,
-        logs,
-        env.UNSAFE_EVAL,
-      );
+      const result = await runModule(body, env, logs);
       return Response.json({ result, logs });
     } catch (error) {
       return Response.json(
-        { error: formatValue(error instanceof Error ? error.message : error), logs },
+        { error: serializeError(error), logs },
         { status: 500 },
       );
     }

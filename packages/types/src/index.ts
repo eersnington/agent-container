@@ -6,7 +6,7 @@ export type ProcessEnvMode = "none" | "allow-matching" | "all";
 
 export type EnvClassification = "public" | "secret";
 
-export type WorkerdLanguage = "js";
+export type WorkerdSourceLanguage = "js" | "ts" | "tsx";
 
 export interface FileEnvSource {
   type: "file";
@@ -153,14 +153,19 @@ export interface WorkerdSessionOptions {
   allowedFetchOrigins?: readonly string[];
   startupTimeoutMs?: number;
   compatibilityDate?: string;
+  compatibilityFlags?: readonly string[];
   workerdBinary?: string;
 }
 
+export type WorkerdRunInput = string | { path: string };
+
 export interface WorkerdRunOptions {
-  code: string;
-  language?: WorkerdLanguage;
+  language?: WorkerdSourceLanguage;
+  name?: string;
+  exportName?: string;
   timeoutMs?: number;
   env?: Record<string, string>;
+  input?: unknown;
 }
 
 export interface WorkerdRunResult {
@@ -169,11 +174,17 @@ export interface WorkerdRunResult {
   durationMs: number;
 }
 
+export interface WorkerdRunErrorDetails {
+  name?: string;
+  message: string;
+  stack?: string;
+}
+
 export interface WorkerdSession {
   readonly port: number;
   readonly status: "created" | "started" | "stopped";
   start(): Promise<void>;
-  run(options: WorkerdRunOptions): Promise<WorkerdRunResult>;
+  run(input: WorkerdRunInput, options?: WorkerdRunOptions): Promise<WorkerdRunResult>;
   stop(): Promise<void>;
 }
 

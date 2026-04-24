@@ -19,12 +19,14 @@
     "check-types": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@agent-container/types": "workspace:*"
+    "@agent-container/types": "workspace:*",
+    "esbuild": "catalog:"
   },
   "devDependencies": {
     "@agent-container/test-utils": "workspace:*",
     "@types/node": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "workerd": "catalog:"
   }
 }

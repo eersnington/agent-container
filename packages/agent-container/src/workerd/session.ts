@@ -1,11 +1,13 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 
 import type {
   ObservabilityEvent,
+  WorkerdRunErrorDetails,
+  WorkerdRunInput,
   WorkerdRunOptions,
   WorkerdRunResult,
   WorkerdSession,
@@ -16,13 +18,50 @@ import { LocalCapabilityBridgeServer, type SessionCapabilityContext } from "../b
 import { findFreePort, findWorkerdBinary } from "./binary.js";
 import { buildConfig } from "./config.js";
 import { workerHarnessSource } from "./harness.js";
+import { prepareWorkerdRun, type PreparedWorkerdRun } from "./module-graph.js";
 
 type EmitEvent = (event: Omit<ObservabilityEvent, "timestamp">) => Promise<void>;
 
 interface ParsedRunResponse {
   result: unknown;
   logs: readonly string[];
-  error?: string;
+  error?: WorkerdRunErrorDetails;
+}
+
+function parseRunErrorDetails(value: unknown): WorkerdRunErrorDetails {
+  if (typeof value === "string") {
+    return { message: value };
+  }
+
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("workerd returned an invalid error response.");
+  }
+
+  if (!("message" in value) || typeof value.message !== "string") {
+    throw new Error("workerd returned an invalid error response.");
+  }
+
+  const details: WorkerdRunErrorDetails = {
+    message: value.message,
+  };
+
+  if ("name" in value && value.name !== undefined) {
+    if (typeof value.name !== "string") {
+      throw new Error("workerd returned an invalid error response.");
+    }
+
+    details.name = value.name;
+  }
+
+  if ("stack" in value && value.stack !== undefined) {
+    if (typeof value.stack !== "string") {
+      throw new Error("workerd returned an invalid error response.");
+    }
+
+    details.stack = value.stack;
+  }
+
+  return details;
 }
 
 function parseRunResponse(payload: unknown): ParsedRunResponse {
@@ -41,16 +80,28 @@ function parseRunResponse(payload: unknown): ParsedRunResponse {
     logs = payload.logs;
   }
 
-  let error: string | undefined;
+  let error: WorkerdRunErrorDetails | undefined;
   if ("error" in payload && payload.error !== undefined) {
-    if (typeof payload.error !== "string") {
-      throw new Error("workerd returned an invalid error response.");
-    }
-
-    error = payload.error;
+    error = parseRunErrorDetails(payload.error);
   }
 
   return { result, logs, error };
+}
+
+export class WorkerdRunError extends Error {
+  public readonly guestName: string | undefined;
+
+  public readonly guestStack: string | undefined;
+
+  public readonly logs: readonly string[];
+
+  public constructor(details: WorkerdRunErrorDetails, logs: readonly string[]) {
+    super(details.message);
+    this.name = "WorkerdRunError";
+    this.guestName = details.name;
+    this.guestStack = details.stack;
+    this.logs = logs;
+  }
 }
 
 async function waitForReady(options: {
@@ -153,7 +204,7 @@ async function terminateProcess(
 }
 
 export class LocalWorkerdSession implements WorkerdSession {
-  public readonly port: number;
+  public port: number;
 
   readonly #options: WorkerdSessionOptions;
 
@@ -172,6 +223,8 @@ export class LocalWorkerdSession implements WorkerdSession {
   #stderr = "";
 
   #bridge: LocalCapabilityBridgeServer | undefined;
+
+  #runQueue: Promise<void> = Promise.resolve();
 
   private constructor(
     port: number,
@@ -198,21 +251,45 @@ export class LocalWorkerdSession implements WorkerdSession {
   }
 
   public async start(): Promise<void> {
+    await this.#startWithPreparedRun(undefined);
+  }
+
+  async #startWithPreparedRun(preparedRun: PreparedWorkerdRun | undefined): Promise<void> {
     if (this.#status === "started") {
       return;
     }
 
     const workerdBinary = await findWorkerdBinary(this.#options.workerdBinary);
+    this.port = await findFreePort();
     const tempDir = await mkdtemp(join(tmpdir(), "agent-container-workerd-"));
     this.#tempDir = tempDir;
 
     try {
       this.#bridge = await LocalCapabilityBridgeServer.create(this.#context, this.#emit);
 
-      await writeFile(join(tempDir, "worker.js"), workerHarnessSource(), "utf8");
+      const runnerModule = {
+        name: "worker.js",
+        fileName: "worker.js",
+        kind: "esModule" as const,
+        content: workerHarnessSource(preparedRun?.entryModuleName),
+      };
+      const modules = [runnerModule, ...(preparedRun?.modules ?? [])];
+
+      for (const module of modules) {
+        const filePath = join(tempDir, module.fileName);
+        await mkdir(dirname(filePath), { recursive: true });
+        if (typeof module.content === "string") {
+          await writeFile(filePath, module.content, "utf8");
+        } else {
+          await writeFile(filePath, module.content);
+        }
+      }
       await writeFile(
         join(tempDir, "config.capnp"),
-        buildConfig(this.port, this.#bridge.port, this.#bridge.token, this.#options),
+        buildConfig(this.port, this.#bridge.port, this.#bridge.token, {
+          ...this.#options,
+          modules,
+        }),
         "utf8",
       );
 
@@ -257,12 +334,35 @@ export class LocalWorkerdSession implements WorkerdSession {
     }
   }
 
-  public async run(options: WorkerdRunOptions): Promise<WorkerdRunResult> {
-    if ((options.language ?? "js") !== "js") {
-      throw new Error("Only JavaScript execution is currently supported.");
-    }
+  public async run(
+    input: WorkerdRunInput,
+    options: WorkerdRunOptions = {},
+  ): Promise<WorkerdRunResult> {
+    const previousRun = this.#runQueue;
+    let releaseRun = (): void => {};
+    this.#runQueue = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
 
-    await this.start();
+    await previousRun;
+    try {
+      return await this.#runUnlocked(input, options);
+    } finally {
+      releaseRun();
+    }
+  }
+
+  async #runUnlocked(
+    input: WorkerdRunInput,
+    options: WorkerdRunOptions,
+  ): Promise<WorkerdRunResult> {
+    const preparedRun = await prepareWorkerdRun({
+      input,
+      options,
+      workspace: this.#context.workspace,
+    });
+    await this.stop();
+    await this.#startWithPreparedRun(preparedRun);
 
     const startedAt = performance.now();
     let response: Response;
@@ -271,8 +371,9 @@ export class LocalWorkerdSession implements WorkerdSession {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          code: options.code,
           userEnv: options.env ?? {},
+          input: options.input,
+          exportName: options.exportName,
         }),
         signal: AbortSignal.timeout(options.timeoutMs ?? 5_000),
       });
@@ -307,9 +408,9 @@ export class LocalWorkerdSession implements WorkerdSession {
         scope: "container",
         action: "workerd.run",
         outcome: "error",
-        detail: body.error,
+        detail: body.error.message,
       });
-      throw new Error(body.error);
+      throw new WorkerdRunError(body.error, body.logs);
     }
 
     if (!response.ok) {
