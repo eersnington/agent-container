@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 
 import type {
@@ -16,6 +16,7 @@ import { LocalCapabilityBridgeServer, type SessionCapabilityContext } from "../b
 import { findFreePort, findWorkerdBinary } from "./binary.js";
 import { buildConfig } from "./config.js";
 import { workerHarnessSource } from "./harness.js";
+import { prepareWorkerdRun, type PreparedWorkerdRun } from "./module-graph.js";
 
 type EmitEvent = (event: Omit<ObservabilityEvent, "timestamp">) => Promise<void>;
 
@@ -145,15 +146,15 @@ async function terminateProcess(
         }
 
         child.kill("SIGKILL");
-      }, 1_000);
+      }, 100);
     }
 
-    forceResolveTimeout = setTimeout(finalize, 2_000);
+    forceResolveTimeout = setTimeout(finalize, 500);
   });
 }
 
 export class LocalWorkerdSession implements WorkerdSession {
-  public readonly port: number;
+  public port: number;
 
   readonly #options: WorkerdSessionOptions;
 
@@ -198,21 +199,45 @@ export class LocalWorkerdSession implements WorkerdSession {
   }
 
   public async start(): Promise<void> {
+    await this.#startWithPreparedRun(undefined, []);
+  }
+
+  async #startWithPreparedRun(
+    preparedRun: PreparedWorkerdRun | undefined,
+    compatibilityFlags: readonly string[],
+  ): Promise<void> {
     if (this.#status === "started") {
       return;
     }
 
     const workerdBinary = await findWorkerdBinary(this.#options.workerdBinary);
+    this.port = await findFreePort();
     const tempDir = await mkdtemp(join(tmpdir(), "agent-container-workerd-"));
     this.#tempDir = tempDir;
 
     try {
       this.#bridge = await LocalCapabilityBridgeServer.create(this.#context, this.#emit);
 
-      await writeFile(join(tempDir, "worker.js"), workerHarnessSource(), "utf8");
+      const runnerModule = {
+        name: "worker.js",
+        fileName: "worker.js",
+        kind: "esModule" as const,
+        content: workerHarnessSource(preparedRun?.entryModuleName),
+      };
+      const modules = [runnerModule, ...(preparedRun?.modules ?? [])];
+
+      for (const module of modules) {
+        const filePath = join(tempDir, module.fileName);
+        await mkdir(dirname(filePath), { recursive: true });
+        await writeFile(filePath, module.content, "utf8");
+      }
       await writeFile(
         join(tempDir, "config.capnp"),
-        buildConfig(this.port, this.#bridge.port, this.#bridge.token, this.#options),
+        buildConfig(this.port, this.#bridge.port, this.#bridge.token, {
+          ...this.#options,
+          compatibilityFlags,
+          modules,
+        }),
         "utf8",
       );
 
@@ -258,11 +283,13 @@ export class LocalWorkerdSession implements WorkerdSession {
   }
 
   public async run(options: WorkerdRunOptions): Promise<WorkerdRunResult> {
-    if ((options.language ?? "js") !== "js") {
-      throw new Error("Only JavaScript execution is currently supported.");
-    }
-
-    await this.start();
+    const preparedRun = await prepareWorkerdRun({
+      source: options.source,
+      workspace: this.#context.workspace,
+    });
+    const compatibilityFlags = options.compatibilityFlags ?? [];
+    await this.stop();
+    await this.#startWithPreparedRun(preparedRun, compatibilityFlags);
 
     const startedAt = performance.now();
     let response: Response;
@@ -271,8 +298,8 @@ export class LocalWorkerdSession implements WorkerdSession {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          code: options.code,
           userEnv: options.env ?? {},
+          exportName: options.exportName,
         }),
         signal: AbortSignal.timeout(options.timeoutMs ?? 5_000),
       });

@@ -6,7 +6,7 @@ export type ProcessEnvMode = "none" | "allow-matching" | "all";
 
 export type EnvClassification = "public" | "secret";
 
-export type WorkerdLanguage = "js";
+export type WorkerdSourceLanguage = "js" | "ts" | "tsx";
 
 export interface FileEnvSource {
   type: "file";
@@ -156,11 +156,26 @@ export interface WorkerdSessionOptions {
   workerdBinary?: string;
 }
 
-export interface WorkerdRunOptions {
+export interface WorkerdCodeSource {
+  type: "code";
   code: string;
-  language?: WorkerdLanguage;
+  language: WorkerdSourceLanguage;
+  name?: string;
+}
+
+export interface WorkerdPathSource {
+  type: "path";
+  path: string;
+}
+
+export type WorkerdRunSource = WorkerdCodeSource | WorkerdPathSource;
+
+export interface WorkerdRunOptions {
+  source: WorkerdRunSource;
+  exportName?: string;
   timeoutMs?: number;
   env?: Record<string, string>;
+  compatibilityFlags?: readonly string[];
 }
 
 export interface WorkerdRunResult {

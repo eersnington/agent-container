@@ -2,6 +2,17 @@ import type { WorkerdSessionOptions } from "@agent-container/types";
 
 export const DEFAULT_COMPATIBILITY_DATE = "2026-04-20";
 
+export interface WorkerdConfigModule {
+  name: string;
+  fileName: string;
+  kind: "esModule" | "json" | "text";
+}
+
+export interface WorkerdConfigOptions extends WorkerdSessionOptions {
+  modules: readonly WorkerdConfigModule[];
+  compatibilityFlags?: readonly string[];
+}
+
 function escapeCapnpString(value: string): string {
   return value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n");
 }
@@ -67,15 +78,28 @@ export function buildConfig(
   port: number,
   bridgePort: number,
   bridgeToken: string,
-  options: WorkerdSessionOptions,
+  options: WorkerdConfigOptions,
 ): string {
   const compatibilityDate = escapeCapnpString(
     options.compatibilityDate ?? DEFAULT_COMPATIBILITY_DATE,
   );
+  const compatibilityFlags =
+    options.compatibilityFlags === undefined || options.compatibilityFlags.length === 0
+      ? ""
+      : `\n  compatibilityFlags = [${options.compatibilityFlags
+          .map((flag) => `"${escapeCapnpString(flag)}"`)
+          .join(", ")}],`;
   const { services, globalOutbound, extraWorkers } = buildOutboundServices({
     allowFetch: options.allowFetch ?? false,
     allowedFetchOrigins: [...(options.allowedFetchOrigins ?? [])],
   });
+  const modules = options.modules
+    .map((module) => {
+      const field =
+        module.kind === "esModule" ? "esModule" : module.kind === "json" ? "json" : "text";
+      return `    ( name = "${escapeCapnpString(module.name)}", ${field} = embed "${escapeCapnpString(module.fileName)}" ),`;
+    })
+    .join("\n");
 
   return `using Workerd = import "/workerd/workerd.capnp";
 
@@ -92,11 +116,10 @@ const config :Workerd.Config = (
 
 const mainWorker :Workerd.Worker = (
   modules = [
-    ( name = "worker", esModule = embed "worker.js" ),
+${modules}
   ],
-  compatibilityDate = "${compatibilityDate}",
+  compatibilityDate = "${compatibilityDate}",${compatibilityFlags}
   bindings = [
-    ( name = "UNSAFE_EVAL", unsafeEval = void ),
     ( name = "CAPABILITY_BRIDGE", service = "capabilityBridge" ),
     ( name = "CAPABILITY_BRIDGE_TOKEN", text = "${escapeCapnpString(bridgeToken)}" ),
   ],
