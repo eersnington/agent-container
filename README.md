@@ -103,7 +103,9 @@ Agent Container should not be described as a secure sandbox for fully untrusted 
 
 It reduces ambient authority by moving access behind bindings, but the host still brokers real filesystem and subprocess operations. `EXEC.run` still starts real host subprocesses. `WORKSPACE` still maps to real files or a copied workspace. The bridge is session-local and token-gated, but it is not a replacement for VM, container, kernel, or production-grade isolation when running adversarial code.
 
-The goal is narrower and more useful for coding agents: do not give generated code broad host authority by default. Give it explicit capabilities that a harness can inspect, constrain, log, and eventually swap for stronger backends.
+`workerd` network policy applies to the guest runtime, not to subprocesses started through `EXEC.run`. A permitted command runs as a host subprocess with the configured cwd, environment projection, timeout, and command policy.
+
+The goal is narrower and more useful for coding agents: do not give generated code broad host authority by default. Give it explicit capabilities that a harness can inspect, constrain, and log.
 
 ## How It Works
 
@@ -155,9 +157,9 @@ Implemented today:
 
 Not implemented yet (WIP):
 
-- a first-class `GIT` binding
 - a first-class `NET` binding
 - module loading for arbitrary TypeScript projects inside the guest
+- narrow workspace change primitives such as `diff`, `statusSummary`, `snapshot`, and `applyPatch`
 
 ## Bindings
 
