@@ -62,14 +62,19 @@ const container = await createAgentContainer({
 await container.start();
 
 const session = await container.createWorkerdSession();
-await session.start();
 
 const { result } = await session.run({
-  code: `
-    const pkg = await WORKSPACE.readText("package.json");
-    const { stdout } = await EXEC.run({ command: "node", args: ["--version"] });
-    return { name: JSON.parse(pkg).name, node: stdout.trim() };
-  `,
+  source: {
+    type: "code",
+    language: "ts",
+    code: `
+      export async function run({ WORKSPACE, EXEC }) {
+        const pkg = await WORKSPACE.readText("package.json");
+        const { stdout } = await EXEC.run({ command: "node", args: ["--version"] });
+        return { name: JSON.parse(pkg).name, node: stdout.trim() };
+      }
+    `,
+  },
 });
 
 console.log(result);
@@ -136,7 +141,7 @@ GUEST (workerd)
   remove
 ```
 
-The current `workerd` harness evaluates JavaScript snippets and passes in binding objects. Those binding methods call a session-local bridge. The bridge validates JSON requests, checks the configured policy through the host controllers, performs the operation, and emits observability events when configured.
+The `workerd` harness runs JavaScript or TypeScript modules and passes capability bindings through a `run(ctx)` export. Those binding methods call a session-local bridge. The bridge validates JSON requests, checks the configured policy through the host controllers, performs the operation, and emits observability events when configured.
 
 ## Current Surface
 
@@ -154,11 +159,11 @@ Implemented today:
 - `ENV` exposes public variables and `SECRETS` exposes secret-classified variables.
 - `OBSERVE.emit` lets guest code add structured events to the host observability sink.
 - `workerd` outbound fetch is disabled by default and can be enabled with optional origin filtering.
+- `session.run()` accepts code or workspace path sources, transpiles TypeScript/TSX per file, and preserves the `workerd` module graph for static relative imports.
 
 Not implemented yet (WIP):
 
 - a first-class `NET` binding
-- module loading for arbitrary TypeScript projects inside the guest
 - narrow workspace change primitives such as `diff`, `statusSummary`, `snapshot`, and `applyPatch`
 
 ## Bindings
@@ -403,13 +408,11 @@ const session = await container.createWorkerdSession({
   allowFetch: false,
 });
 
-await session.start();
-
 const { result, logs, durationMs } = await session.run({
-  code: `
-    console.log("inside workerd");
-    return await WORKSPACE.readText("README.md");
-  `,
+  source: {
+    type: "path",
+    path: "scripts/check.ts",
+  },
   timeoutMs: 5_000,
 });
 

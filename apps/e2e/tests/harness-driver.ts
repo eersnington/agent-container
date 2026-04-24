@@ -78,7 +78,6 @@ export async function createHarnessDriver(
 
   await container.start();
   const session = await container.createWorkerdSession();
-  await session.start();
 
   return {
     container,
@@ -88,7 +87,11 @@ export async function createHarnessDriver(
     },
     async run(code: string, env?: Record<string, string>): Promise<WorkerdRunResult> {
       return await session.run({
-        code,
+        source: {
+          type: "code",
+          language: "js",
+          code: `export async function run({ WORKSPACE, EXEC, ENV, SECRETS, OBSERVE, env }) {\n${code}\n}`,
+        },
         env,
         timeoutMs: 10_000,
       });
