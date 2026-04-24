@@ -224,6 +224,8 @@ export class LocalWorkerdSession implements WorkerdSession {
 
   #bridge: LocalCapabilityBridgeServer | undefined;
 
+  #runQueue: Promise<void> = Promise.resolve();
+
   private constructor(
     port: number,
     options: WorkerdSessionOptions,
@@ -335,6 +337,24 @@ export class LocalWorkerdSession implements WorkerdSession {
   public async run(
     input: WorkerdRunInput,
     options: WorkerdRunOptions = {},
+  ): Promise<WorkerdRunResult> {
+    const previousRun = this.#runQueue;
+    let releaseRun = (): void => {};
+    this.#runQueue = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+
+    await previousRun;
+    try {
+      return await this.#runUnlocked(input, options);
+    } finally {
+      releaseRun();
+    }
+  }
+
+  async #runUnlocked(
+    input: WorkerdRunInput,
+    options: WorkerdRunOptions,
   ): Promise<WorkerdRunResult> {
     const preparedRun = await prepareWorkerdRun({
       input,
