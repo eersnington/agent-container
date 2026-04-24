@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createAgentContainer } from "agent-container";
+import { createAgentContainer, WorkerdRunError } from "agent-container";
 import { createTempWorkspace, writeWorkspaceFiles, type TempWorkspace } from "@agent-container/test-utils";
 
 interface WorkerdResource {
@@ -126,6 +126,27 @@ describe("workerd module execution", () => {
     });
   });
 
+  it("passes structured invocation input to module runs", async () => {
+    const { container } = await createTestContainer({
+      "README.md": "structured input\n",
+      "src/task.ts": `
+        export async function run({ input, WORKSPACE }: { input: { path: string }, WORKSPACE: { readText(path: string): Promise<string> } }) {
+          return await WORKSPACE.readText(input.path);
+        }
+      `,
+    });
+    const session = await container.createWorkerdSession();
+
+    await expect(
+      session.run(
+        { path: "src/task.ts" },
+        {
+          input: { path: "README.md" },
+        },
+      ),
+    ).resolves.toMatchObject({ result: "structured input\n" });
+  });
+
   it("supports custom export names and capability bindings through ctx", async () => {
     const { container } = await createTestContainer({
       ".env": "PUBLIC_MODE=demo\n",
@@ -196,5 +217,29 @@ describe("workerd module execution", () => {
     const session = await container.createWorkerdSession();
 
     await expect(session.run({ path: "../outside.ts" })).rejects.toThrow("Path escapes workspace root");
+  });
+
+  it("preserves guest error name, stack, and logs", async () => {
+    const { container } = await createTestContainer({});
+    const session = await container.createWorkerdSession();
+
+    let caught: unknown;
+    try {
+      await session.run(`
+        export function run({ console }) {
+          console.log("before failure");
+          throw new TypeError("bad input");
+        }
+      `);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(WorkerdRunError);
+    const error = caught as WorkerdRunError;
+    expect(error.message).toBe("bad input");
+    expect(error.guestName).toBe("TypeError");
+    expect(error.guestStack).toContain("TypeError: bad input");
+    expect(error.logs).toEqual(["before failure"]);
   });
 });

@@ -43,6 +43,20 @@ function createLogger(logs) {
   };
 }
 
+function serializeError(error) {
+  if (error instanceof Error) {
+    return {
+      name: typeof error.name === "string" && error.name !== "" ? error.name : undefined,
+      message: typeof error.message === "string" ? error.message : String(error),
+      stack: typeof error.stack === "string" ? error.stack : undefined,
+    };
+  }
+
+  return {
+    message: formatValue(error),
+  };
+}
+
 function createBridgeBindings(env) {
   async function call(path, payload) {
     const response = await env.CAPABILITY_BRIDGE.fetch(
@@ -151,6 +165,7 @@ async function runModule(body, env, logs) {
     return await candidate({
       ...bindings,
       env: body.userEnv ?? {},
+      input: body.input,
       console: logger,
     });
   } finally {
@@ -177,7 +192,7 @@ export default {
       return Response.json({ result, logs });
     } catch (error) {
       return Response.json(
-        { error: formatValue(error instanceof Error ? error.message : error), logs },
+        { error: serializeError(error), logs },
         { status: 500 },
       );
     }

@@ -65,14 +65,15 @@ const session = await container.createWorkerdSession();
 
 const { result } = await session.run(
   `
-    export async function run({ WORKSPACE, EXEC }) {
-      const pkg = await WORKSPACE.readText("package.json");
+    export async function run({ input, WORKSPACE, EXEC }) {
+      const pkg = await WORKSPACE.readText(input.packagePath);
       const { stdout } = await EXEC.run({ command: "node", args: ["--version"] });
       return { name: JSON.parse(pkg).name, node: stdout.trim() };
     }
   `,
   {
     language: "ts",
+    input: { packagePath: "package.json" },
   },
 );
 

@@ -165,12 +165,19 @@ export interface WorkerdRunOptions {
   exportName?: string;
   timeoutMs?: number;
   env?: Record<string, string>;
+  input?: unknown;
 }
 
 export interface WorkerdRunResult {
   result: unknown;
   logs: readonly string[];
   durationMs: number;
+}
+
+export interface WorkerdRunErrorDetails {
+  name?: string;
+  message: string;
+  stack?: string;
 }
 
 export interface WorkerdSession {

@@ -6,6 +6,7 @@ import type { Readable } from "node:stream";
 
 import type {
   ObservabilityEvent,
+  WorkerdRunErrorDetails,
   WorkerdRunInput,
   WorkerdRunOptions,
   WorkerdRunResult,
@@ -24,7 +25,43 @@ type EmitEvent = (event: Omit<ObservabilityEvent, "timestamp">) => Promise<void>
 interface ParsedRunResponse {
   result: unknown;
   logs: readonly string[];
-  error?: string;
+  error?: WorkerdRunErrorDetails;
+}
+
+function parseRunErrorDetails(value: unknown): WorkerdRunErrorDetails {
+  if (typeof value === "string") {
+    return { message: value };
+  }
+
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("workerd returned an invalid error response.");
+  }
+
+  if (!("message" in value) || typeof value.message !== "string") {
+    throw new Error("workerd returned an invalid error response.");
+  }
+
+  const details: WorkerdRunErrorDetails = {
+    message: value.message,
+  };
+
+  if ("name" in value && value.name !== undefined) {
+    if (typeof value.name !== "string") {
+      throw new Error("workerd returned an invalid error response.");
+    }
+
+    details.name = value.name;
+  }
+
+  if ("stack" in value && value.stack !== undefined) {
+    if (typeof value.stack !== "string") {
+      throw new Error("workerd returned an invalid error response.");
+    }
+
+    details.stack = value.stack;
+  }
+
+  return details;
 }
 
 function parseRunResponse(payload: unknown): ParsedRunResponse {
@@ -43,16 +80,28 @@ function parseRunResponse(payload: unknown): ParsedRunResponse {
     logs = payload.logs;
   }
 
-  let error: string | undefined;
+  let error: WorkerdRunErrorDetails | undefined;
   if ("error" in payload && payload.error !== undefined) {
-    if (typeof payload.error !== "string") {
-      throw new Error("workerd returned an invalid error response.");
-    }
-
-    error = payload.error;
+    error = parseRunErrorDetails(payload.error);
   }
 
   return { result, logs, error };
+}
+
+export class WorkerdRunError extends Error {
+  public readonly guestName: string | undefined;
+
+  public readonly guestStack: string | undefined;
+
+  public readonly logs: readonly string[];
+
+  public constructor(details: WorkerdRunErrorDetails, logs: readonly string[]) {
+    super(details.message);
+    this.name = "WorkerdRunError";
+    this.guestName = details.name;
+    this.guestStack = details.stack;
+    this.logs = logs;
+  }
 }
 
 async function waitForReady(options: {
@@ -303,6 +352,7 @@ export class LocalWorkerdSession implements WorkerdSession {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           userEnv: options.env ?? {},
+          input: options.input,
           exportName: options.exportName,
         }),
         signal: AbortSignal.timeout(options.timeoutMs ?? 5_000),
@@ -338,9 +388,9 @@ export class LocalWorkerdSession implements WorkerdSession {
         scope: "container",
         action: "workerd.run",
         outcome: "error",
-        detail: body.error,
+        detail: body.error.message,
       });
-      throw new Error(body.error);
+      throw new WorkerdRunError(body.error, body.logs);
     }
 
     if (!response.ok) {
