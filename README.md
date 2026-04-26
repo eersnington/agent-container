@@ -1,12 +1,12 @@
 # Agent Container
 
-### Give your agents tiny boxes, powered by [workerd](https://github.com/cloudflare/workerd)
+### Give your clankers tiny boxes, powered by [workerd](https://github.com/cloudflare/workerd)
 
 > ⚠️ This project is under active development. APIs may change.
 
-Agent Container is a small runtime layer for running agent-generated code against a workspace through capability bindings.
+Agent Container is a runtime layer for coding agent harnesses. It lets agent-generated code operate on a workspace through explicit bindings — `WORKSPACE`, `EXEC`, `ENV` — rather than raw host APIs like `fs`, `child_process`, or `process.env`.
 
-The core idea is that a workspace should not have to be the process working directory, the filesystem authority boundary, the command execution boundary, and the environment boundary all at once. Instead, the host owns the real authority and projects only the intended pieces into `workerd` as live bindings:
+The core idea: a workspace directory shouldn't simultaneously be the execution boundary, the filesystem authority boundary, and the environment boundary. Those are different concerns and should be controlled separately. The host owns real authority and projects only what's needed into `workerd` as live bindings:
 
 ```ts
 const pkg = await WORKSPACE.readText("package.json");
@@ -22,7 +22,7 @@ const { stdout } = await execFile("node", ["--version"]);
 const apiUrl = process.env.API_URL;
 ```
 
-That distinction is the point of this project. Agent Container gives coding agent harnesses a capability-bound execution model: guest code runs in `workerd`, while the Node.js host brokers filesystem access, subprocess execution, environment values, network policy, and observability through explicit bindings.
+Agent Container gives coding agent harnesses a capability-bound execution model: guest code runs in `workerd`, while the Node.js host brokers filesystem access, subprocess execution, environment values, network policy, and observability through explicit, auditable bindings.
 
 ---
 
@@ -88,29 +88,30 @@ Code inside the `workerd` session does not get Node's `fs`, `process`, or `child
 
 ## Why
 
-Most coding agent harnesses gets tools like read, write, edit, grep, bash, and git. Those tools often run on the host system with the project directory acting as a soft boundary. That works, but it makes the working directory do too many jobs:
+Most coding agent harnesses provide tools like read, write, edit, grep, bash, and git — typically running on the host with the project directory as a soft boundary. That works until it doesn't:
 
-- workspace root
-- execution boundary
-- filesystem authority boundary
-- environment boundary
-- audit boundary
+- A read tool resolves paths on the host filesystem — an agent passes `../../.ssh/id_rsa` and it just works
+- A bash tool inherits the full parent process environment, so every secret in process.env is silently available to anything the agent runs
+- A grep over "the project" follows a symlink outside the workspace root without anyone noticing
+- A subprocess writes to a path outside the workspace because cwd resolution was never constrained
 
-Those are different concerns.
+There's no audit of what the agent actually read, wrote, or executed; just a process and a directory, and an assumption they stayed inside the lines
 
-Agent Container separates them. The workspace root becomes a scoped `WORKSPACE` object. Command execution becomes an `EXEC` binding with allowlists, timeouts, controlled cwd resolution, and logged outcomes. Environment access becomes `ENV` and `SECRETS`, populated only from selected sources. Network access is configured at the `workerd` session level instead of being assumed.
+None of this requires malicious intent. Your clanker can sometimes be daft, hallucinate a path, or following bad instructions that can cause real damage through tools that were never designed to say no.
+
+Agent Container replaces that assumption with explicit capability bindings. `WORKSPACE` scopes filesystem access to the project root and enforces path containment. `EXEC` runs only allowlisted commands with controlled cwd resolution and logged outcomes. `ENV` and `SECRETS` expose only what you explicitly include; nothing leaks in from `process.env` by default. Network access is configured at the session level rather than inherited. Every operation crosses a bridge the host controls, which means there's an actual record of what the agent did.
 
 This follows the Cloudflare Workers resource model, where bindings carry both permission and API as runtime objects. In an agent harness, the same model maps cleanly to the resources an agent needs for coding work.
 
 ## Threat Model
 
-Agent Container should not be described as a secure sandbox for fully untrusted code.
+Agent Container is **not a secure sandbox for fully untrusted code**.
 
-It reduces ambient authority by moving access behind bindings, but the host still brokers real filesystem and subprocess operations. `EXEC.run` still starts real host subprocesses. `WORKSPACE` still maps to real files or a copied workspace. The bridge is session-local and token-gated, but it is not a replacement for VM, container, kernel, or production-grade isolation when running adversarial code.
+It reduces ambient authority by moving access behind explicit bindings, but the host still brokers real filesystem and subprocess operations. `EXEC.run` starts real host subprocesses. `WORKSPACE` maps to real files or a copied workspace. The bridge is session-local and token-gated, but it is not a substitute for VM-level, container-level, or kernel-level isolation when running adversarial code.
 
-`workerd` network policy applies to the guest runtime, not to subprocesses started through `EXEC.run`. A permitted command runs as a host subprocess with the configured cwd, environment projection, timeout, and command policy.
+Note that `workerd` network policy applies to the guest runtime only — not to subprocesses started through `EXEC.run`. A permitted command runs as a host subprocess with the configured cwd, environment projection, timeout, and command policy applied.
 
-The goal is narrower and more useful for coding agents: do not give generated code broad host authority by default. Give it explicit capabilities that a harness can inspect, constrain, and log.
+The goal is narrower and more practical for coding agents: don't give generated code broad host authority by default. Give it explicit, inspectable, constrained capabilities instead.
 
 ## How It Works
 
@@ -164,6 +165,7 @@ Implemented today:
 Not implemented yet (WIP):
 
 - a first-class `NET` binding
+- a first-class `GIT` binding
 - narrow workspace change primitives such as `diff`, `statusSummary`, `snapshot`, and `applyPatch`
 
 ## Bindings
@@ -466,6 +468,11 @@ agent-container describe
 ```
 
 `describe` prints the container description for the current directory.
+
+
+## Acknowledgements
+
+Thanks to [rivet-dev/secure-exec](https://github.com/rivet-dev/secure-exec) — Agent Container was partly inspired by their implementation and the thinking behind it.
 
 ## License
 
