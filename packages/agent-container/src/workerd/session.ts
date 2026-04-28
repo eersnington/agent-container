@@ -14,7 +14,7 @@ import type {
   WorkerdSessionOptions,
 } from "@agent-container/types";
 
-import { LocalCapabilityBridgeServer, type SessionCapabilityContext } from "../bridge.js";
+import { LocalCapabilityBridgeServer, type SessionCapabilityContext } from "../bridge/index.js";
 import { findFreePort, findWorkerdBinary } from "./binary.js";
 import { buildConfig } from "./config.js";
 import { workerHarnessSource } from "./harness.js";
