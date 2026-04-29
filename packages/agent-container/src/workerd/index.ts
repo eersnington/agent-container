@@ -1,6 +1,6 @@
 import type { ObservabilityEvent, WorkerdSession, WorkerdSessionOptions } from "@agent-container/types";
 
-import type { SessionCapabilityContext } from "../bridge.js";
+import type { SessionCapabilityContext } from "../bridge/index.js";
 import { LocalWorkerdSession, WorkerdRunError } from "./session.js";
 
 type EmitEvent = (event: Omit<ObservabilityEvent, "timestamp">) => Promise<void>;

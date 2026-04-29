@@ -4,7 +4,7 @@ export {
   defineAgentContainerPlugin,
 } from "./container.js";
 export { resolveEnv } from "./env.js";
-export { LocalCapabilityBridgeServer } from "./bridge.js";
+export { LocalCapabilityBridgeServer } from "./bridge/index.js";
 export { LocalExecController } from "./exec.js";
 export { createWorkerdSession, LocalWorkerdSession, WorkerdRunError } from "./workerd/index.js";
 export { LocalWorkspaceController } from "./workspace.js";
